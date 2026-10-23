@@ -71,7 +71,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.8",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.9",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -119,6 +119,15 @@ def _safe_error(exc: Exception) -> str:
         return f"HTTP {exc.code}: {detail}" if detail else f"HTTP {exc.code}"
     if isinstance(exc, (URLError, TimeoutError)):
         return "network or timeout error"
+    if isinstance(exc, (ValueError, RuntimeError)):
+        message = str(exc).strip()
+        if message:
+            message = re.sub(
+                r"(?i)(password|token|authorization|api[_ -]?key)\s*[:=]\s*\S+",
+                r"\1=[redacted]",
+                message,
+            )
+            return message[:240]
     return "invalid response"
 
 
@@ -910,7 +919,7 @@ def _page() -> str:
     <label class="toggle"><input id="email-enabled" type="checkbox"> Send the daily image and event by email</label>
     <p class="hint" id="email-status">Enable email delivery to check Home Assistant SMTP and configure it if needed.</p>
     <div class="recipient-row">
-      <button id="edit-smtp" class="secondary" type="button" hidden>Edit SMTP settings</button>
+      <button id="edit-smtp" class="secondary" type="button">Configure SMTP settings</button>
       <button id="test-email" class="secondary" type="button">Send test email</button>
     </div>
     <p class="hint">The test uses the current image and event when available; otherwise it sends a generic SMTP test message. It never generates an image.</p>
@@ -1032,7 +1041,9 @@ def _page() -> str:
     setValue('email-camera-entity', config.email_camera_entity || 'camera.moment_in_history');
     const emailSelect = document.getElementById('email-entity');
     const email = data.email || {};
-    document.getElementById('edit-smtp').hidden = email.smtp_configured !== true;
+    const smtpButton = document.getElementById('edit-smtp');
+    smtpButton.hidden = false;
+    smtpButton.textContent = email.smtp_configured === true ? 'Edit SMTP settings' : 'Configure SMTP settings';
     fill({ id: 'email-entity', multiple: true, allowEmpty: true, label: 'Saved value' }, config.email_notify_entity, email.notify_entities || [], false);
     emailSelect.setAttribute('aria-label', 'Existing Home Assistant notify entities');
     if (!emailEnableRequested && !dirtyFields.has('email-enabled')) emailEnabled.checked = Boolean(config.email_notify_entity);
@@ -1157,6 +1168,16 @@ def _page() -> str:
       const response = await fetch(apiPath('api/smtp'), { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'SMTP settings could not be loaded');
+      if (data.configured !== true) {
+        smtpForm.reset();
+        document.getElementById('smtp-port').value = '587';
+        document.getElementById('smtp-verify-ssl').checked = true;
+        setSmtpDialogMode('configure');
+        smtpStatus.textContent = 'Enter the SMTP details Home Assistant should use.';
+        if (typeof smtpDialog.showModal === 'function') smtpDialog.showModal();
+        else smtpDialog.setAttribute('open', 'open');
+        return;
+      }
       setSmtpDialogMode('update');
       document.getElementById('smtp-sender').value = data.sender || '';
       document.getElementById('smtp-sender-name').value = data.sender_name || '';
@@ -1179,6 +1200,18 @@ def _page() -> str:
     button.disabled = true;
     status.textContent = 'Sending SMTP test email…';
     try {
+      const smtpResponse = await fetch(apiPath('api/smtp'), { cache: 'no-store' });
+      const smtp = await smtpResponse.json();
+      if (!smtpResponse.ok) throw new Error(smtp.error || 'SMTP settings could not be checked');
+      if (smtp.configured !== true) {
+        status.textContent = 'Configure SMTP settings first.';
+        editSmtp();
+        return;
+      }
+      if (!Array.from(emailEntity.selectedOptions).some(function (option) { return option.value; })) {
+        status.textContent = 'Select at least one email recipient and save configuration first.';
+        return;
+      }
       const response = await fetch(apiPath('api/test-email'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
