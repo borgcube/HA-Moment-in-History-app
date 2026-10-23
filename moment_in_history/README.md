@@ -54,3 +54,7 @@ The app cannot safely create `input_boolean.disclose`, the local-file camera, or
 3. Paste the dashboard card from [`examples/overview-dashboard.yaml`](../examples/overview-dashboard.yaml) into the Overview dashboard's **Manual** card editor.
 
 The repository README contains the full configuration, email test script, archive option, and troubleshooting details.
+
+## Image providers
+
+The App Configuration tab preserves the existing `openai` and `lan` choices and also accepts `comfyui`. For ComfyUI, set `image_backend_url` to the ComfyUI base URL, set `comfyui_model` to a checkpoint filename under ComfyUI's `models/checkpoints` directory, and choose dimensions/steps supported by that checkpoint. Keep a remote ComfyUI deployment on loopback behind an authenticated or source-IP-restricted HTTPS reverse proxy; do not expose its raw port.

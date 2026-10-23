@@ -1,5 +1,5 @@
 name: Moment in history
-version: "1.8.4"
+version: "1.8.5"
 slug: moment_in_history
 description: Daily historical moment artwork for the Home Assistant dashboard
 startup: application
@@ -30,6 +30,7 @@ options:
   openai_image_quality: high
   openai_image_size: 1024x1024
   image_model: Tongyi-MAI/Z-Image-Turbo
+  comfyui_model: sd_xl_turbo_1.0.safetensors
   image_width: 1024
   image_height: 1024
   image_steps: 9
@@ -49,12 +50,13 @@ schema:
   fallback_text_model: str
   image_backend_url: str
   image_backend_fallback_url: str
-  image_provider: match(openai|lan)
+  image_provider: match(openai|lan|comfyui)
   openai_api_key: password
   openai_image_model: str
   openai_image_quality: match(low|medium|high)
   openai_image_size: match(^[0-9]+x[0-9]+$)
   image_model: str
+  comfyui_model: str
   image_width: int
   image_height: int
   image_steps: int

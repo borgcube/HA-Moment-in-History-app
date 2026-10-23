@@ -19,9 +19,11 @@ import os
 import re
 import signal
 import shutil
+import secrets
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from html.parser import HTMLParser
@@ -29,14 +31,14 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.8.4"
+APP_VERSION = "1.8.5"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -79,6 +81,9 @@ OLLAMA_FALLBACK_URL = _setting("OLLAMA_FALLBACK_URL", "fallback_ollama_url", "ht
 TEXT_MODEL = _setting("MOMENT_TEXT_MODEL", "text_model", "qwen3.8:27b-mlx")
 FALLBACK_TEXT_MODEL = _setting("MOMENT_FALLBACK_TEXT_MODEL", "fallback_text_model", "gemma4:e4b")
 IMAGE_MODEL = _setting("MOMENT_IMAGE_MODEL", "image_model", "Tongyi-MAI/Z-Image-Turbo")
+COMFYUI_MODEL = _setting(
+    "MOMENT_COMFYUI_MODEL", "comfyui_model", "sd_xl_turbo_1.0.safetensors"
+)
 IMAGE_BACKEND_URL = _setting("MOMENT_IMAGE_BACKEND_URL", "image_backend_url", "http://ollama02.borgcube.com:8188")
 IMAGE_BACKEND_FALLBACK_URL = os.environ.get("MOMENT_IMAGE_BACKEND_FALLBACK_URL", str(ADDON_OPTIONS.get("image_backend_fallback_url", ""))).strip()
 IMAGE_PROVIDER = _setting("MOMENT_IMAGE_PROVIDER", "image_provider", "openai").strip().lower()
@@ -361,6 +366,123 @@ def post_image(url: str, payload: dict[str, Any], *, timeout: int = 1800) -> byt
     return body
 
 
+def get_image(url: str, *, timeout: int = 1800) -> bytes:
+    """Fetch a generated PNG from an image service without exposing its URL."""
+    request = Request(
+        url,
+        headers={
+            "Accept": "image/png",
+            "User-Agent": "BORGcube-MomentInHistory/1.1",
+        },
+        method="GET",
+    )
+    with urlopen(request, timeout=timeout) as response:
+        content_type = response.headers.get_content_type()
+        body = response.read()
+    if content_type != "image/png" or not body:
+        raise RuntimeError(f"Image backend returned {content_type} with {len(body)} bytes")
+    return body
+
+
+def comfyui_workflow(prompt: str, *, seed: int) -> dict[str, Any]:
+    """Build the small API-format workflow used by the ComfyUI provider."""
+    negative_prompt = (
+        "text, letters, words, numbers, captions, labels, logos, watermarks, "
+        "speech bubbles, documents, signs, blurry, low quality, distorted anatomy"
+    )
+    return {
+        "3": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": COMFYUI_MODEL},
+        },
+        "4": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": IMAGE_WIDTH, "height": IMAGE_HEIGHT, "batch_size": 1},
+        },
+        "5": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": prompt, "clip": ["3", 1]},
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": negative_prompt, "clip": ["3", 1]},
+        },
+        "7": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": max(1, IMAGE_STEPS),
+                "cfg": 1.0,
+                "sampler_name": "euler_ancestral",
+                "scheduler": "sgm_uniform",
+                "denoise": 1.0,
+                "model": ["3", 0],
+                "positive": ["5", 0],
+                "negative": ["6", 0],
+                "latent_image": ["4", 0],
+            },
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["7", 0], "vae": ["3", 2]},
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": "moment-in-history", "images": ["8", 0]},
+        },
+    }
+
+
+def generate_comfyui_image(prompt: str) -> bytes:
+    """Queue a native ComfyUI workflow and return its saved PNG."""
+    endpoint = IMAGE_BACKEND_URL.rstrip("/")
+    queue_payload = {
+        "prompt": comfyui_workflow(prompt, seed=secrets.randbelow(2**63)),
+        "client_id": uuid.uuid4().hex,
+    }
+    response = json.loads(post_json(f"{endpoint}/prompt", queue_payload, timeout=60))
+    prompt_id = str(response.get("prompt_id", "")).strip()
+    if not prompt_id:
+        error = response.get("error") or response.get("node_errors")
+        raise RuntimeError(f"ComfyUI rejected the workflow: {error or 'no prompt id'}")
+
+    deadline = time.monotonic() + 1800
+    history_url = f"{endpoint}/history/{quote(prompt_id, safe='')}"
+    while time.monotonic() < deadline:
+        history = fetch_json(history_url)
+        result = history.get(prompt_id)
+        if isinstance(result, dict):
+            status = result.get("status") or {}
+            messages = status.get("messages") if isinstance(status, dict) else []
+            for message in messages or []:
+                if isinstance(message, list) and message and message[0] in {
+                    "execution_error",
+                    "execution_interrupted",
+                }:
+                    raise RuntimeError(f"ComfyUI execution failed: {message[0]}")
+
+            outputs = result.get("outputs") or {}
+            for node_output in outputs.values():
+                if not isinstance(node_output, dict):
+                    continue
+                for image in node_output.get("images") or []:
+                    if not isinstance(image, dict) or not image.get("filename"):
+                        continue
+                    query = urlencode(
+                        {
+                            "filename": str(image["filename"]),
+                            "subfolder": str(image.get("subfolder", "")),
+                            "type": str(image.get("type", "output")),
+                        }
+                    )
+                    return get_image(f"{endpoint}/view?{query}", timeout=1800)
+
+            if isinstance(status, dict) and status.get("status_str") == "error":
+                raise RuntimeError("ComfyUI execution failed without an image")
+        time.sleep(1)
+    raise TimeoutError("ComfyUI image generation timed out")
+
+
 def generate_openai_image(prompt: str) -> bytes:
     """Generate a PNG through the OpenAI Images API without logging the key."""
     if not OPENAI_API_KEY:
@@ -414,6 +536,10 @@ def run_image_model(prompt: str, destination: Path) -> str:
             return f"OpenAI {OPENAI_IMAGE_MODEL} ({OPENAI_IMAGE_QUALITY}, {OPENAI_IMAGE_SIZE})"
         except Exception as exc:  # noqa: BLE001 - keep the LAN fallback available
             log(f"OpenAI image backend unavailable: {exc}; trying LAN fallback")
+
+    if IMAGE_PROVIDER == "comfyui":
+        destination.write_bytes(generate_comfyui_image(prompt))
+        return f"ComfyUI {COMFYUI_MODEL} ({endpoint_host(IMAGE_BACKEND_URL)})"
 
     payload = {
         "prompt": prompt,
@@ -540,7 +666,7 @@ def startup_report(mode: str) -> None:
     log(
         f"Image service configured: provider={IMAGE_PROVIDER}, openai_model={OPENAI_IMAGE_MODEL}, "
         f"openai_key={'present' if OPENAI_API_KEY else 'missing'}, "
-        f"lan_backend={endpoint_host(IMAGE_BACKEND_URL)}"
+        f"lan_backend={endpoint_host(IMAGE_BACKEND_URL)}, comfyui_model={COMFYUI_MODEL}"
     )
     log(f"Home Assistant API: {'available' if SUPERVISOR_TOKEN else 'unavailable'}")
     log(f"Email delivery: {email_status}; only after successful image replacement")

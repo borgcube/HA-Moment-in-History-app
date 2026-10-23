@@ -38,7 +38,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.8",
+            "User-Agent": "BORGcube-MomentInHistory/1.8.5",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },

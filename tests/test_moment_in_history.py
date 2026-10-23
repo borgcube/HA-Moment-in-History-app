@@ -45,7 +45,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.8.4 starting", report)
+            self.assertIn("Moment in history App 1.8.5 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -222,6 +222,71 @@ class EventPageRefreshTest(unittest.TestCase):
                     moment_in_history.generate(date(2026, 10, 23))
 
             send_email.assert_not_called()
+
+
+class ComfyUIImageProviderTest(unittest.TestCase):
+    @staticmethod
+    def _response(body: bytes, content_type: str | None = None) -> MagicMock:
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = body
+        if content_type:
+            response.headers.get_content_type.return_value = content_type
+        return response
+
+    def test_comfyui_provider_queues_workflow_and_downloads_png(self):
+        queue_response = self._response(b'{"prompt_id":"prompt-1"}')
+        history_response = self._response(
+            b'{"prompt-1":{"status":{"status_str":"success"},"outputs":'
+            b'{"9":{"images":[{"filename":"moment.png","subfolder":"","type":"output"}]}}}}'
+        )
+        image_response = self._response(b"png-bytes", "image/png")
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(moment_in_history, "IMAGE_BACKEND_URL", "http://comfyui.example/comfyui"), \
+                patch.object(moment_in_history, "COMFYUI_MODEL", "sd_xl_turbo_1.0.safetensors"), \
+                patch.object(moment_in_history, "IMAGE_WIDTH", 512), \
+                patch.object(moment_in_history, "IMAGE_HEIGHT", 512), \
+                patch.object(moment_in_history, "IMAGE_STEPS", 1), \
+                patch.object(moment_in_history, "urlopen", side_effect=[queue_response, history_response, image_response]) as urlopen, \
+                patch.object(moment_in_history.time, "sleep"):
+            image = moment_in_history.generate_comfyui_image("A small wordless scene")
+
+        self.assertEqual(image, b"png-bytes")
+        queue_request = urlopen.call_args_list[0].args[0]
+        workflow_request = json.loads(queue_request.data.decode("utf-8"))
+        self.assertEqual(workflow_request["prompt"]["3"]["inputs"]["ckpt_name"], "sd_xl_turbo_1.0.safetensors")
+        self.assertEqual(workflow_request["prompt"]["4"]["inputs"]["width"], 512)
+        self.assertEqual(workflow_request["prompt"]["7"]["inputs"]["steps"], 1)
+        self.assertIn("/history/prompt-1", urlopen.call_args_list[1].args[0].full_url)
+        self.assertIn("filename=moment.png", urlopen.call_args_list[2].args[0].full_url)
+
+    def test_comfyui_provider_reports_execution_errors(self):
+        queue_response = self._response(b'{"prompt_id":"prompt-1"}')
+        history_response = self._response(
+            b'{"prompt-1":{"status":{"status_str":"error","messages":'
+            b'[["execution_error",{}]]},"outputs":{}}}'
+        )
+        with patch.object(moment_in_history, "IMAGE_BACKEND_URL", "http://comfyui.example"), \
+                patch.object(moment_in_history, "urlopen", side_effect=[queue_response, history_response]), \
+                patch.object(moment_in_history.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "execution_error"):
+                moment_in_history.generate_comfyui_image("A small wordless scene")
+
+    def test_image_provider_dispatches_to_comfyui(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "image.png"
+            with patch.object(moment_in_history, "IMAGE_PROVIDER", "comfyui"), \
+                    patch.object(moment_in_history, "generate_comfyui_image", return_value=b"png-bytes"):
+                description = moment_in_history.run_image_model("prompt", destination)
+            self.assertEqual(destination.read_bytes(), b"png-bytes")
+        self.assertIn("ComfyUI", description)
+
+    def test_comfyui_provider_is_in_the_app_schema(self):
+        schema = (Path(__file__).resolve().parents[1] / "moment_in_history" / "config.yaml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("image_provider: match(openai|lan|comfyui)", schema)
+        self.assertIn("comfyui_model: sd_xl_turbo_1.0.safetensors", schema)
 
     def test_archive_image_writes_a_dated_copy(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -8,7 +8,7 @@ The project is packaged as a Home Assistant App (formerly called an add-on). It 
 
 - Britannica is attempted first for the daily event list, with Wikimedia's machine-readable On This Day feed as a fallback when Britannica is unavailable.
 - Ollama ranks the complete event list and writes the one-sentence “ten seconds before” scene direction.
-- OpenAI `gpt-image-2` is the default image backend, with an optional LAN backend fallback.
+- OpenAI `gpt-image-2` is the default image backend, with optional LAN and ComfyUI backends.
 - Two Ollama endpoints can be configured for text-generation failover.
 - The date is composited after generation, so it is the only intentional text on the image.
 - The disclosure card reads the current event metadata as plain text and avoids stale browser-cached details.
@@ -86,6 +86,7 @@ openai_image_size: 1024x1024
 image_backend_url: http://ollama02.example.local:8188
 image_backend_fallback_url: ""
 image_model: Tongyi-MAI/Z-Image-Turbo
+comfyui_model: sd_xl_turbo_1.0.safetensors
 image_width: 1024
 image_height: 1024
 image_steps: 9
@@ -106,7 +107,11 @@ generate_on_restart: false
 
 `lan` calls a compatible image service at `image_backend_url`. The LAN service must expose `POST /generate`, accept a JSON body containing `prompt`, `width`, `height`, and `steps`, and return a PNG image. The repository does not include that separate image service.
 
-The OpenAI path automatically tries the configured LAN image backend if the OpenAI request fails. Ollama remains the text/ranking service in either case.
+`comfyui` calls the ComfyUI API at `image_backend_url`. It queues a native checkpoint/KSampler/VAEDecode/SaveImage workflow, polls `/history/{prompt_id}`, and downloads the PNG from `/view`. Set `comfyui_model` to the checkpoint filename in ComfyUI's `models/checkpoints` directory. The workflow uses `image_width`, `image_height`, and `image_steps`; SDXL Turbo is normally used with one step and square dimensions.
+
+The OpenAI path automatically tries the configured LAN image backend if the OpenAI request fails. Ollama remains the text/ranking service for all image providers.
+
+When a ComfyUI server is reachable through a reverse proxy, keep the ComfyUI process bound to loopback and restrict the proxy route to the Home Assistant host or trusted LAN. Do not expose an unauthenticated ComfyUI port directly to the Internet. The provider does not log API credentials or full backend URLs.
 
 ### Optional email delivery
 
