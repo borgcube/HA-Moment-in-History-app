@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.4 starting", report)
+            self.assertIn("Moment in history App 1.9.5 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -516,6 +516,27 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertEqual(result["models"]["fallback_ollama"], ["fallback-model"])
             self.assertEqual(result["config"]["primary_ollama_url"], primary)
             self.assertEqual(result["config"]["fallback_ollama_url"], fallback)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_ingress_model_discovery_uses_entered_image_backend_url(self):
+        server = config_ui.start_server(
+            port=0,
+            get_options=lambda: {"image_backend_url": "", "image_backend_fallback_url": ""},
+            save_options=lambda changes: None,
+            log=lambda message: None,
+        )
+        port = server.server_address[1]
+        image_backend = "https://openclaw.example/comfyui"
+        try:
+            with patch.object(config_ui, "image_backend_models", return_value=["detected.safetensors"]) as discover:
+                with urlopen(
+                    f"http://127.0.0.1:{port}/api/models?image_backend_url={image_backend}"
+                ) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+            discover.assert_called_once_with(image_backend)
+            self.assertEqual(result["models"]["image_backend"], ["detected.safetensors"])
         finally:
             server.shutdown()
             server.server_close()

@@ -1,5 +1,5 @@
 name: Moment in history
-version: "1.9.4"
+version: "1.9.5"
 slug: moment_in_history
 description: Daily historical moment artwork for the Home Assistant dashboard
 startup: application

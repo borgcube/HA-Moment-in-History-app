@@ -71,7 +71,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.4",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.5",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -996,7 +996,12 @@ def _page() -> str:
   let refreshInFlight = null;
   function discoveryUrl() {
     const query = new URLSearchParams();
-    [['primary_ollama_url', 'primary-url-input'], ['fallback_ollama_url', 'fallback-url-input']].forEach(function (pair) {
+    [
+      ['primary_ollama_url', 'primary-url-input'],
+      ['fallback_ollama_url', 'fallback-url-input'],
+      ['image_backend_url', 'image-backend-url'],
+      ['image_backend_fallback_url', 'image-backend-fallback-url']
+    ].forEach(function (pair) {
       const value = document.getElementById(pair[1]).value.trim();
       if (value) query.set(pair[0], value);
     });
@@ -1141,7 +1146,7 @@ def _page() -> str:
         element.addEventListener(eventName, function () { dirtyFields.add(id); });
       });
     });
-  ['primary-url-input', 'fallback-url-input'].forEach(function (id) {
+  ['primary-url-input', 'fallback-url-input', 'image-backend-url', 'image-backend-fallback-url'].forEach(function (id) {
     let timer = null;
     document.getElementById(id).addEventListener('input', function () {
       window.clearTimeout(timer);
@@ -1280,7 +1285,7 @@ def start_server(
                 try:
                     options = dict(get_options())
                     query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
-                    for field in ENDPOINT_FIELDS:
+                    for field in (*ENDPOINT_FIELDS, *IMAGE_ENDPOINT_FIELDS):
                         if field in query:
                             options[field] = query[field][0].strip()
                     result = discover_models(options)
