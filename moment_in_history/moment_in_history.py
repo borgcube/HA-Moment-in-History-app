@@ -36,7 +36,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.8.4"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -685,6 +685,7 @@ def get_managed_email_recipients() -> dict[str, Any]:
         )
     return {
         "available": bool(details.get("available")),
+        "smtp_configured": bool(details.get("available")),
         "message": details.get("message", ""),
         "recipients": recipients,
     }
@@ -706,6 +707,21 @@ def add_managed_email_recipient(email: str) -> dict[str, Any]:
     }
     _write_managed_recipients(existing + [record])
     log(f"Managed SMTP recipient added ({record['entity_id'] or 'entity pending'})")
+    return {"email": record["email"], "entity_id": record["entity_id"]}
+
+
+def configure_smtp_integration(settings: dict[str, Any]) -> dict[str, Any]:
+    """Create Home Assistant SMTP without retaining the submitted credentials."""
+    recipient = config_ui.configure_smtp(HOME_ASSISTANT_API_URL, SUPERVISOR_TOKEN, settings)
+    record = {
+        "email": str(recipient["email"]),
+        "entity_id": str(recipient.get("entity_id", "")) or None,
+        "entry_id": str(recipient.get("entry_id", "")),
+        "subentry_id": str(recipient.get("subentry_id", "")),
+    }
+    existing = _read_managed_recipients()
+    _write_managed_recipients(existing + [record])
+    log(f"Managed SMTP integration configured ({record['entity_id'] or 'entity pending'})")
     return {"email": record["email"], "entity_id": record["entity_id"]}
 
 
@@ -733,6 +749,7 @@ def start_config_ui() -> Any | None:
             get_managed_recipients=get_managed_email_recipients,
             add_email_recipient=add_managed_email_recipient,
             remove_email_recipient=remove_managed_email_recipient,
+            configure_smtp=configure_smtp_integration,
         )
         log(f"Configuration UI: Home Assistant Ingress listening on port {CONFIG_UI_PORT}")
         return server

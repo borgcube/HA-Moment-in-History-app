@@ -110,16 +110,16 @@ The OpenAI path automatically tries the configured LAN image backend if the Open
 
 ### Optional email delivery
 
-Email delivery uses Home Assistant's built-in **SMTP** integration. The App does not install or configure SMTP automatically because the setup requires your sender address, SMTP host, port, encryption mode, credentials/app password, and recipient addresses. This is intentional: those values belong to Home Assistant and are not copied into the App.
+Email delivery uses Home Assistant's built-in **SMTP** integration. The App can configure SMTP through Home Assistant's supported config flow when the user enables email delivery, or the integration can be set up manually first. The setup requires the sender address, SMTP host, port, encryption mode, credentials/app password, and recipient addresses; the App does not retain those values.
 
-Set it up before enabling email delivery:
+You can set it up before enabling email delivery:
 
 1. Go to **Settings → Devices & services → Add integration → SMTP**.
 2. Enter the SMTP account details and complete the integration setup.
 3. Add one or more recipients to the SMTP integration. Home Assistant creates a `notify.*` entity for each recipient.
 4. Open **Moment in history → Info → Open Web UI** and refresh the model and notification lists. All current `notify.*` entities are available in the multi-select under **Email delivery**.
 
-The same page can manage SMTP recipients for you. Type an email address and press Space, Enter, or **Add email**. The page uses Home Assistant's supported SMTP config-flow API to create the recipient, waits for its `notify.*` entity, and shows an email-to-entity pill. Removing that pill removes the corresponding SMTP recipient through Home Assistant. The App records only the non-secret mapping needed to manage recipients in its persistent `/data` area; it does not copy SMTP credentials. If the installed Home Assistant version does not expose the supported config-flow API, automatic management is disabled and the existing `notify.*` dropdown remains available. This follows Home Assistant's documented config-flow and subentry model rather than editing `.storage` files directly; see the [Home Assistant config-flow documentation](https://developers.home-assistant.io/docs/core/integration/config_flow/).
+Alternatively, enable **Send the daily image and event by email** in the App Web UI. If no SMTP integration is found, the App opens a setup dialog for the same sender, host, port, encryption, credentials, and first recipient fields. It submits the values through Home Assistant's supported SMTP config-flow API and waits for the resulting `notify.*` entity. Credentials are sent directly to Home Assistant and are never saved in the App's `/data` mapping or returned to the browser. Once SMTP exists, type an email address and press Space, Enter, or **Add email** to create additional recipients. Removing a managed pill removes the corresponding SMTP recipient through Home Assistant. If the installed Home Assistant version does not expose the supported config-flow API, automatic management is disabled and the existing `notify.*` dropdown remains available. This follows Home Assistant's documented config-flow and subentry model rather than editing `.storage` files directly; see the [Home Assistant config-flow documentation](https://developers.home-assistant.io/docs/core/integration/config_flow/).
 
 The App also accepts a comma-separated list of recipient entity IDs, for example `notify.moment_in_history_recipient,notify.second_recipient`. The App no longer stores SMTP hostnames, usernames, passwords, TLS settings, or raw email addresses. If no recipient entity is selected, email delivery remains disabled.
 

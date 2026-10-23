@@ -15,7 +15,7 @@ The app container installs automatically after this. The remaining steps below c
 
 ## Configure Home Assistant SMTP
 
-SMTP must be configured once in Home Assistant before the app can send email. You need an email account whose provider permits SMTP access. Obtain the provider's SMTP host, port, encryption mode, username, and password or app-specific password first.
+The app can configure SMTP for you when you enable email delivery, or you can configure it first from **Settings → Devices & services**. You need an email account whose provider permits SMTP access. Obtain the provider's SMTP host, port, encryption mode, username, and password or app-specific password first.
 
 1. Go to **Settings → Devices & services**.
 2. Select **Add integration**, search for **SMTP**, and open it.
@@ -33,11 +33,13 @@ SMTP must be configured once in Home Assistant before the app can send email. Yo
 4. Complete the integration setup and add at least one recipient when prompted.
 5. To add more later, open the SMTP integration under **Settings → Devices & services**, select **Add recipient**, enter the address, and submit it.
 
-Home Assistant creates a separate `notify.*` entity for each SMTP recipient. This app does not store SMTP credentials or configure the SMTP server itself.
+Alternatively, open **Moment in history → Info → Open Web UI**, enable **Send the daily image and event by email**, and complete the popup. The popup asks for the same SMTP values and the first recipient, submits them through Home Assistant's supported SMTP config flow, and waits for the new `notify.*` entity. SMTP passwords are passed through to Home Assistant and are not stored by this app.
+
+Home Assistant creates a separate `notify.*` entity for each SMTP recipient. SMTP credentials remain owned by Home Assistant; this app only submits them to Home Assistant's supported config flow when you choose the in-app setup dialog and does not store them.
 
 ### Connect SMTP recipients to the app
 
-Open **Moment in history → Info → Open Web UI** and select **Refresh available models and notifications**. Existing `notify.*` entities appear in the **Email delivery** list; select one or more and save.
+Open **Moment in history → Info → Open Web UI** and select **Refresh available models and notifications**. Existing `notify.*` entities appear in the **Email delivery** list; enable **Send the daily image and event by email**, select one or more recipients, and save.
 
 The same page can manage recipients after SMTP has been configured: type an email address and press **Space**, **Enter**, or **Add email**. The app asks Home Assistant to create the SMTP recipient and displays the resulting email-to-`notify.*` pill. Removing a pill removes only the SMTP recipient created through this app. If automatic recipient management is unavailable, add recipients in the SMTP integration and select their existing `notify.*` entities instead.
 

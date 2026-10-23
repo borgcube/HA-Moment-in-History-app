@@ -45,7 +45,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.8.3 starting", report)
+            self.assertIn("Moment in history App 1.8.4 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -365,6 +365,83 @@ class ModelSelectionTest(unittest.TestCase):
             },
         )
 
+    def test_smtp_setup_flow_creates_integration_and_first_recipient_without_retaining_password(self):
+        recipient = {
+            "email": "new@example.com",
+            "entity_id": "notify.new_recipient",
+            "entry_id": "smtp-entry",
+            "subentry_id": "subentry-2",
+        }
+        with patch.object(
+            config_ui,
+            "_request_json",
+            side_effect=[
+                [],
+                {"flow_id": "flow-1"},
+                {"type": "create_entry", "result": {"entry_id": "smtp-entry"}, "next_flow": ["config_subentries_flow", "subflow-1"]},
+                {"type": "create_entry", "result": {"subentry_id": "subentry-2"}},
+            ],
+        ) as request_json, patch.object(
+            config_ui, "smtp_recipient_details", return_value={"recipients": [recipient]}
+        ):
+            created = config_ui.configure_smtp(
+                "http://supervisor/core/api",
+                "secret-token",
+                {
+                    "sender": "sender@example.com",
+                    "sender_name": "Moment in history",
+                    "server": "smtp.example.com",
+                    "port": "587",
+                    "encryption": "starttls",
+                    "username": "sender@example.com",
+                    "password": "secret-password",
+                    "verify_ssl": True,
+                    "recipient": "new@example.com",
+                },
+            )
+
+        self.assertEqual(created, recipient)
+        setup_payload = request_json.call_args_list[2].kwargs["payload"]
+        self.assertEqual(setup_payload["user_input"]["server"], "smtp.example.com")
+        self.assertEqual(setup_payload["user_input"]["password"], "secret-password")
+        self.assertEqual(request_json.call_args_list[3].kwargs["payload"], {"user_input": {"recipient": "new@example.com"}})
+
+    def test_ingress_ui_exposes_smtp_setup_endpoint(self):
+        settings: list[dict[str, object]] = []
+        server = config_ui.start_server(
+            port=0,
+            get_options=lambda: {"primary_ollama_url": "", "fallback_ollama_url": ""},
+            save_options=lambda changes: None,
+            log=lambda message: None,
+            configure_smtp=lambda configuration: (settings.append(configuration) or {"email": "new@example.com", "entity_id": "notify.new"}),
+        )
+        port = server.server_address[1]
+        try:
+            request = Request(
+                f"http://127.0.0.1:{port}/api/smtp",
+                data=json.dumps(
+                    {
+                        "sender": "sender@example.com",
+                        "server": "smtp.example.com",
+                        "port": "587",
+                        "encryption": "starttls",
+                        "password": "secret-password",
+                        "verify_ssl": True,
+                        "recipient": "new@example.com",
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["recipient"]["entity_id"], "notify.new")
+            self.assertEqual(settings[0]["server"], "smtp.example.com")
+            self.assertEqual(settings[0]["password"], "secret-password")
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_ingress_ui_manages_email_recipient_endpoint(self):
         added: list[str] = []
         removed: list[str] = []
@@ -450,6 +527,8 @@ class ModelSelectionTest(unittest.TestCase):
                 page = response.read().decode("utf-8")
             self.assertIn('<select id="primary-model">', page)
             self.assertIn('<select id="email-entity" multiple', page)
+            self.assertIn('id="email-enabled"', page)
+            self.assertIn('id="smtp-dialog"', page)
             self.assertIn("Refresh available models", page)
 
             with urlopen(f"http://127.0.0.1:{port}/api/models") as response:

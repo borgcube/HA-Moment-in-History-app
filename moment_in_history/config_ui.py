@@ -419,6 +419,31 @@ def smtp_recipient_details(api_url: str, token: str) -> dict[str, Any]:
     return {"available": True, "message": "SMTP recipients are managed by Home Assistant.", "recipients": recipients}
 
 
+def _config_flow_error(result: Any, fallback: str) -> str:
+    """Extract a safe config-flow error code without returning submitted values."""
+    if not isinstance(result, dict):
+        return fallback
+    errors = result.get("errors")
+    if isinstance(errors, dict):
+        for value in errors.values():
+            if value:
+                return str(value)
+    reason = result.get("reason")
+    return str(reason) if reason else fallback
+
+
+def _wait_for_smtp_recipient(api_url: str, token: str, email: str) -> dict[str, Any]:
+    """Wait for Home Assistant to expose the notify entity after a flow creates it."""
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        details = smtp_recipient_details(api_url, token)
+        for recipient in details["recipients"]:
+            if recipient["email"].casefold() == email.casefold() and recipient.get("entity_id"):
+                return recipient
+        time.sleep(0.5)
+    raise RuntimeError("Home Assistant created the recipient, but its notify entity is not ready yet")
+
+
 def add_smtp_recipient(api_url: str, token: str, email: str) -> dict[str, Any]:
     """Create one recipient through Home Assistant's supported SMTP config flow."""
     email = email.strip()
@@ -450,16 +475,87 @@ def add_smtp_recipient(api_url: str, token: str, email: str) -> dict[str, Any]:
         payload={"user_input": {"recipient": email}},
     )
     if not isinstance(result, dict) or result.get("type") != "create_entry":
-        reason = result.get("reason", "Home Assistant rejected the recipient") if isinstance(result, dict) else "Home Assistant rejected the recipient"
-        raise RuntimeError(str(reason))
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        details = smtp_recipient_details(api_url, token)
-        for recipient in details["recipients"]:
-            if recipient["email"].casefold() == email.casefold() and recipient.get("entity_id"):
-                return recipient
-        time.sleep(0.5)
-    raise RuntimeError("Recipient was added, but Home Assistant did not expose its notify entity yet")
+        raise RuntimeError(_config_flow_error(result, "Home Assistant rejected the recipient"))
+    return _wait_for_smtp_recipient(api_url, token, email)
+
+
+def configure_smtp(api_url: str, token: str, settings: dict[str, Any]) -> dict[str, Any]:
+    """Create Home Assistant's SMTP integration and its first recipient through config flows."""
+    sender = str(settings.get("sender", "")).strip()
+    sender_name = str(settings.get("sender_name", "")).strip()
+    server = str(settings.get("server", "")).strip()
+    username = str(settings.get("username", "")).strip()
+    password = str(settings.get("password", ""))
+    recipient = str(settings.get("recipient", "")).strip()
+    encryption = str(settings.get("encryption", "starttls")).strip().lower()
+    try:
+        port = int(settings.get("port", 587))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("SMTP port must be a number") from exc
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", sender):
+        raise ValueError("Enter a valid sender email address")
+    if not server:
+        raise ValueError("Enter the SMTP server host")
+    if not 1 <= port <= 65535:
+        raise ValueError("SMTP port must be between 1 and 65535")
+    if encryption not in {"starttls", "tls", "none"}:
+        raise ValueError("Choose STARTTLS, TLS, or no encryption")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", recipient):
+        raise ValueError("Enter a valid recipient email address")
+    if _smtp_config_entries(api_url, token):
+        raise RuntimeError("Home Assistant SMTP is already configured; add a recipient instead")
+
+    user_input: dict[str, Any] = {
+        "sender": sender,
+        "server": server,
+        "port": port,
+        "encryption": encryption,
+        "verify_ssl": bool(settings.get("verify_ssl", True)),
+        "options": {},
+    }
+    if sender_name:
+        user_input["sender_name"] = sender_name
+    if username:
+        user_input["username"] = username
+    if password:
+        user_input["password"] = password
+
+    flow = _request_json(
+        f"{api_url.rstrip('/')}/config/config_entries/flow",
+        headers=_home_assistant_headers(token),
+        method="POST",
+        payload={"handler": "smtp"},
+    )
+    flow_id = str(flow.get("flow_id", "")) if isinstance(flow, dict) else ""
+    if not flow_id:
+        raise RuntimeError("Home Assistant did not start the SMTP setup flow")
+    result = _request_json(
+        f"{api_url.rstrip('/')}/config/config_entries/flow/{flow_id}",
+        headers=_home_assistant_headers(token),
+        method="POST",
+        payload={"user_input": user_input},
+    )
+    if not isinstance(result, dict) or result.get("type") != "create_entry":
+        raise RuntimeError(_config_flow_error(result, "Home Assistant rejected the SMTP settings"))
+
+    next_flow = result.get("next_flow")
+    if isinstance(next_flow, list) and len(next_flow) >= 2 and str(next_flow[1]).strip():
+        recipient_result = _request_json(
+            f"{api_url.rstrip('/')}/config/config_entries/subentries/flow/{str(next_flow[1])}",
+            headers=_home_assistant_headers(token),
+            method="POST",
+            payload={"user_input": {"recipient": recipient}},
+        )
+        if not isinstance(recipient_result, dict) or recipient_result.get("type") != "create_entry":
+            raise RuntimeError(
+                "SMTP was configured, but Home Assistant rejected the first recipient: "
+                + _config_flow_error(recipient_result, "recipient setup failed")
+            )
+    else:
+        # Keep compatibility with versions that create the parent entry without
+        # returning the next recipient flow.
+        add_smtp_recipient(api_url, token, recipient)
+    return _wait_for_smtp_recipient(api_url, token, recipient)
 
 
 def delete_smtp_recipient(api_url: str, token: str, recipient: dict[str, Any]) -> None:
@@ -511,6 +607,13 @@ def _page() -> str:
     .status { min-height: 1.4em; margin-top: 12px; }
     .error { color: #fca5a5; margin: 8px 0; }
     .hint { color: #9ca3af; font-size: .9rem; }
+    .toggle { display: flex; gap: 10px; align-items: center; margin: 8px 0 14px; }
+    .toggle input { width: auto; }
+    dialog { max-width: 680px; width: calc(100% - 32px); border: 1px solid #4b5563; border-radius: 12px; background: #1f2937; color: #f3f4f6; }
+    dialog::backdrop { background: rgba(0, 0, 0, .72); }
+    dialog form { display: grid; gap: 8px; }
+    dialog menu { display: flex; gap: 8px; justify-content: flex-end; padding: 0; margin: 12px 0 0; }
+    dialog menu button { width: auto; min-width: 110px; }
   </style>
 </head>
 <body>
@@ -537,7 +640,8 @@ def _page() -> str:
 
   <section>
     <h2>Email delivery</h2>
-    <p class="hint" id="email-status">Configure Home Assistant SMTP first. Existing notify entities can be selected below.</p>
+    <label class="toggle"><input id="email-enabled" type="checkbox"> Send the daily image and event by email</label>
+    <p class="hint" id="email-status">Enable email delivery to check Home Assistant SMTP and configure it if needed.</p>
     <label for="email-entity">Existing Home Assistant notify entities</label>
     <select id="email-entity" multiple size="4"></select>
     <label for="email-recipient">Add an SMTP email recipient</label>
@@ -554,6 +658,38 @@ def _page() -> str:
   <div class="status" id="status" role="status"></div>
   <div id="errors"></div>
 </main>
+<dialog id="smtp-dialog" aria-labelledby="smtp-dialog-title">
+  <form id="smtp-form">
+    <h2 id="smtp-dialog-title">Configure Home Assistant SMTP</h2>
+    <p class="hint">These credentials are sent to Home Assistant's SMTP config flow and are not saved by this app.</p>
+    <label for="smtp-sender">Sender email</label>
+    <input id="smtp-sender" type="email" autocomplete="email" required placeholder="sender@example.com">
+    <label for="smtp-sender-name">Sender name</label>
+    <input id="smtp-sender-name" type="text" autocomplete="name" placeholder="Moment in history">
+    <label for="smtp-server">SMTP server host</label>
+    <input id="smtp-server" type="text" required placeholder="smtp.example.com">
+    <label for="smtp-port">SMTP port</label>
+    <input id="smtp-port" type="number" min="1" max="65535" value="587" required>
+    <label for="smtp-encryption">Connection security</label>
+    <select id="smtp-encryption">
+      <option value="starttls" selected>STARTTLS (recommended, usually port 587)</option>
+      <option value="tls">TLS (usually port 465)</option>
+      <option value="none">None (only when explicitly supported by the provider)</option>
+    </select>
+    <label for="smtp-username">Username</label>
+    <input id="smtp-username" type="text" autocomplete="username" placeholder="Usually the sender email">
+    <label for="smtp-password">Password or app-specific password</label>
+    <input id="smtp-password" type="password" autocomplete="current-password">
+    <label class="toggle"><input id="smtp-verify-ssl" type="checkbox" checked> Verify the SSL certificate</label>
+    <label for="smtp-recipient">First recipient email</label>
+    <input id="smtp-recipient" type="email" autocomplete="email" required placeholder="recipient@example.com">
+    <div class="status" id="smtp-status" role="status"></div>
+    <menu>
+      <button id="smtp-cancel" class="secondary" type="button">Cancel</button>
+      <button id="smtp-submit" type="submit">Configure SMTP and add recipient</button>
+    </menu>
+  </form>
+</dialog>
 <script>
 (function () {
   const fields = [
@@ -565,6 +701,12 @@ def _page() -> str:
   const status = document.getElementById('status');
   const errors = document.getElementById('errors');
   const emailRecipient = document.getElementById('email-recipient');
+  const emailEnabled = document.getElementById('email-enabled');
+  const emailEntity = document.getElementById('email-entity');
+  const smtpDialog = document.getElementById('smtp-dialog');
+  const smtpForm = document.getElementById('smtp-form');
+  const smtpStatus = document.getElementById('smtp-status');
+  let emailEnableRequested = false;
   function apiPath(path) {
     let base = window.location.pathname;
     if (!base.endsWith('/')) base += '/';
@@ -594,6 +736,7 @@ def _page() -> str:
     fill(fields[2], config.openai_image_model, models.openai_image || [], !config.openai_key_present);
     const email = data.email || {};
     fill(fields[3], config.email_notify_entity, email.notify_entities || [], false);
+    if (!emailEnableRequested) emailEnabled.checked = Boolean(config.email_notify_entity);
     const managed = email.managed_recipients || [];
     const pills = document.getElementById('managed-recipients');
     pills.replaceChildren();
@@ -613,11 +756,13 @@ def _page() -> str:
     document.getElementById('openai-status').textContent = config.openai_key_present
       ? 'Image models visible to the configured API key are listed below.'
       : 'Enter an OpenAI API key in App Configuration first, then refresh this page.';
-    document.getElementById('email-status').textContent = email.management_available
-      ? (email.notify_entities && email.notify_entities.length
-        ? 'Choose one or more notify entities, or add an SMTP email address below.'
-        : 'No notify entities were found yet. Add an SMTP email address below or configure one in Home Assistant.')
-      : (email.management_message || 'Automatic SMTP recipient management is unavailable; choose an existing notify entity instead.');
+    document.getElementById('email-status').textContent = email.smtp_configured === false
+      ? 'Home Assistant SMTP is not configured. Enable email or choose Add email to configure it now.'
+      : (email.management_available
+        ? (email.notify_entities && email.notify_entities.length
+          ? 'Choose one or more notify entities, or add an SMTP email address below.'
+          : 'SMTP is configured, but no recipient is available yet. Add an SMTP email address below.')
+        : (email.management_message || 'Home Assistant SMTP status is unavailable; choose an existing notify entity instead.'));
     errors.replaceChildren();
     Object.keys(data.errors || {}).forEach(function (key) {
       const item = document.createElement('div');
@@ -649,14 +794,43 @@ def _page() -> str:
     if (!response.ok) throw new Error(data.error || 'email recipient update failed');
     return data;
   }
+  async function configureSmtp(settings) {
+    const response = await fetch(apiPath('api/smtp'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'SMTP setup failed');
+    return data;
+  }
+  function openSmtpDialog(recipient) {
+    document.getElementById('smtp-recipient').value = recipient || emailRecipient.value.trim();
+    smtpStatus.textContent = '';
+    if (typeof smtpDialog.showModal === 'function') {
+      smtpDialog.showModal();
+    } else {
+      smtpDialog.setAttribute('open', 'open');
+    }
+  }
+  function closeSmtpDialog() {
+    if (typeof smtpDialog.close === 'function') smtpDialog.close();
+    else smtpDialog.removeAttribute('open');
+  }
   async function addEmail() {
     const email = emailRecipient.value.trim();
     if (!email) return;
-    status.textContent = 'Adding the SMTP recipient through Home Assistant…';
     try {
+      const current = await refresh();
+      if (current && current.email && current.email.smtp_configured === false) {
+        openSmtpDialog(email);
+        return;
+      }
+      status.textContent = 'Adding the SMTP recipient through Home Assistant…';
       const result = await manageEmail('add', email);
       emailRecipient.value = '';
       await refresh();
+      emailEnabled.checked = true;
       const entityId = result.recipient && result.recipient.entity_id;
       if (entityId) {
         const select = document.getElementById('email-entity');
@@ -687,6 +861,7 @@ def _page() -> str:
         ? Array.from(select.selectedOptions).map(function (option) { return option.value; }).filter(Boolean).join(',')
         : select.value;
     });
+    if (!emailEnabled.checked) values.email_notify_entity = '';
     try {
       const response = await fetch(apiPath('api/config'), {
         method: 'POST',
@@ -703,6 +878,68 @@ def _page() -> str:
   document.getElementById('refresh').addEventListener('click', refresh);
   document.getElementById('save').addEventListener('click', save);
   document.getElementById('add-email').addEventListener('click', addEmail);
+  emailEnabled.addEventListener('change', async function () {
+    if (!emailEnabled.checked) {
+      emailEnableRequested = false;
+      status.textContent = 'Email delivery will be disabled when you save.';
+      return;
+    }
+    emailEnableRequested = true;
+    const current = await refresh();
+    if (!current) {
+      emailEnableRequested = false;
+      emailEnabled.checked = false;
+    } else if (current.email && current.email.smtp_configured === false) {
+      openSmtpDialog('');
+    } else {
+      emailEnableRequested = false;
+      emailEnabled.checked = true;
+    }
+  });
+  emailEntity.addEventListener('change', function () {
+    if (emailEntity.selectedOptions.length) emailEnabled.checked = true;
+  });
+  document.getElementById('smtp-cancel').addEventListener('click', function () {
+    emailEnableRequested = false;
+    emailEnabled.checked = false;
+    closeSmtpDialog();
+  });
+  smtpForm.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    smtpStatus.textContent = 'Configuring Home Assistant SMTP…';
+    const settings = {
+      sender: document.getElementById('smtp-sender').value.trim(),
+      sender_name: document.getElementById('smtp-sender-name').value.trim(),
+      server: document.getElementById('smtp-server').value.trim(),
+      port: document.getElementById('smtp-port').value,
+      encryption: document.getElementById('smtp-encryption').value,
+      username: document.getElementById('smtp-username').value.trim(),
+      password: document.getElementById('smtp-password').value,
+      verify_ssl: document.getElementById('smtp-verify-ssl').checked,
+      recipient: document.getElementById('smtp-recipient').value.trim()
+    };
+    try {
+      const result = await configureSmtp(settings);
+      const entityId = result.recipient && result.recipient.entity_id;
+      smtpForm.reset();
+      document.getElementById('smtp-port').value = '587';
+      document.getElementById('smtp-verify-ssl').checked = true;
+      closeSmtpDialog();
+      emailRecipient.value = '';
+      const current = await refresh();
+      emailEnableRequested = false;
+      emailEnabled.checked = true;
+      if (entityId) {
+        if (!Array.from(emailEntity.options).some(function (option) { return option.value === entityId; })) {
+          emailEntity.add(new Option(entityId, entityId));
+        }
+        Array.from(emailEntity.options).forEach(function (option) { if (option.value === entityId) option.selected = true; });
+      }
+      status.textContent = current ? 'SMTP configured and recipient added. Select Save selections to enable delivery.' : 'SMTP configured and recipient added.';
+    } catch (error) {
+      smtpStatus.textContent = 'Unable to configure SMTP: ' + error.message;
+    }
+  });
   emailRecipient.addEventListener('keydown', function (event) {
     if (event.key === ' ' || event.key === 'Enter' || event.key === ',') {
       event.preventDefault();
@@ -727,6 +964,7 @@ def start_server(
     get_managed_recipients: Callable[[], dict[str, Any]] | None = None,
     add_email_recipient: Callable[[str], dict[str, Any]] | None = None,
     remove_email_recipient: Callable[[str], None] | None = None,
+    configure_smtp: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> ThreadingHTTPServer:
     """Start the authenticated-by-Ingress configuration server."""
 
@@ -767,6 +1005,7 @@ def start_server(
                         "notify_entities": [],
                         "managed_recipients": [],
                         "management_available": bool(get_managed_recipients),
+                        "smtp_configured": None,
                     }
                     if get_notify_entities:
                         try:
@@ -780,11 +1019,13 @@ def start_server(
                                 {
                                     "managed_recipients": managed.get("recipients", []),
                                     "management_available": bool(managed.get("available")),
+                                    "smtp_configured": managed.get("smtp_configured", managed.get("available")),
                                     "management_message": str(managed.get("message", "")),
                                 }
                             )
                         except Exception as exc:  # noqa: BLE001 - show a safe UI diagnostic
                             result["email"]["management_available"] = False
+                            result["email"]["smtp_configured"] = None
                             result["email"]["management_message"] = "Automatic SMTP recipient management is unavailable."
                             result["errors"]["email_management"] = _safe_error(exc)
                     self._json(200, result)
@@ -799,7 +1040,7 @@ def start_server(
                 self._json(403, {"error": "Ingress access required"})
                 return
             path = urlsplit(self.path).path
-            if path not in {"/api/config", "/api/email-recipient"}:
+            if path not in {"/api/config", "/api/email-recipient", "/api/smtp"}:
                 self._not_found()
                 return
             try:
@@ -809,6 +1050,26 @@ def start_server(
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("request must be an object")
+                if path == "/api/smtp":
+                    if not configure_smtp:
+                        raise ValueError("SMTP setup is unavailable")
+                    configuration = {
+                        key: payload.get(key)
+                        for key in (
+                            "sender",
+                            "sender_name",
+                            "server",
+                            "port",
+                            "encryption",
+                            "username",
+                            "password",
+                            "verify_ssl",
+                            "recipient",
+                        )
+                    }
+                    result = configure_smtp(configuration)
+                    self._json(200, {"recipient": result})
+                    return
                 if path == "/api/email-recipient":
                     action = str(payload.get("action", "")).strip().lower()
                     email = str(payload.get("email", "")).strip()
