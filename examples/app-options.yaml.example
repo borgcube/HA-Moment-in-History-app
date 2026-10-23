@@ -2,6 +2,7 @@
 # This is an example only; do not put API keys in this file.
 primary_ollama_url: http://ollama01.example.local:11434
 fallback_ollama_url: http://ollama02.example.local:11434
+# The model fields can be selected from App Info -> Open Web UI after install.
 text_model: qwen3.8:27b-mlx
 fallback_text_model: gemma4:e4b
 image_provider: openai

@@ -30,9 +30,11 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+import config_ui
+
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 POLL_INTERVAL_SECONDS = 30
 HOME_ASSISTANT_API_URL = os.environ.get(
     "HOME_ASSISTANT_API_URL", "http://supervisor/core/api"
@@ -98,6 +100,7 @@ ARCHIVE_IMAGES = _setting("MOMENT_ARCHIVE_IMAGES", "archive_images", "false").lo
     "yes",
     "on",
 }
+CONFIG_UI_PORT = int(_setting("MOMENT_CONFIG_UI_PORT", "config_ui_port", "8099"))
 
 
 @dataclass(frozen=True)
@@ -592,6 +595,45 @@ def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
     log(f"Email sent via Home Assistant SMTP ({EMAIL_NOTIFY_ENTITY})")
 
 
+def save_model_options(changes: dict[str, str]) -> None:
+    """Persist model selections through Supervisor so they survive restarts."""
+    if not SUPERVISOR_TOKEN:
+        raise RuntimeError("SUPERVISOR_TOKEN is unavailable")
+    options = _load_addon_options() or dict(ADDON_OPTIONS)
+    for field in config_ui.MODEL_FIELDS:
+        if field in changes:
+            options[field] = changes[field]
+    request = Request(
+        "http://supervisor/addons/self/options",
+        data=json.dumps({"options": options}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+            "Content-Type": "application/json",
+            "User-Agent": "BORGcube-MomentInHistory/1.7",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            response.read()
+    except HTTPError as exc:
+        raise RuntimeError(f"Supervisor options update failed ({exc.code})") from exc
+
+
+def start_config_ui() -> None:
+    """Start the Ingress-only model selection page."""
+    try:
+        config_ui.start_server(
+            port=CONFIG_UI_PORT,
+            get_options=_load_addon_options,
+            save_options=save_model_options,
+            log=log,
+        )
+        log(f"Configuration UI: Home Assistant Ingress listening on port {CONFIG_UI_PORT}")
+    except OSError as exc:
+        log(f"Configuration UI unavailable: {exc}")
+
+
 def archive_image(target_day: date) -> None:
     """Keep an optional dated copy without affecting the current dashboard image."""
     if not ARCHIVE_IMAGES:
@@ -704,6 +746,7 @@ def should_generate_today(
 
 def daemon() -> int:
     """Run inside the HA add-on and keep the daily asset current."""
+    start_config_ui()
     marker_path = ROOT / ".last-generated-date"
     last_attempt_date: date | None = None
     last_attempt_at = 0.0

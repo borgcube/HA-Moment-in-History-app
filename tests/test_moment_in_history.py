@@ -6,11 +6,13 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from urllib.request import Request, urlopen
 from unittest.mock import MagicMock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "moment_in_history"))
 import moment_in_history  # noqa: E402
+import config_ui  # noqa: E402
 
 
 class EventPageRefreshTest(unittest.TestCase):
@@ -41,7 +43,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.6.0 starting", report)
+            self.assertIn("Moment in history App 1.7.0 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -175,6 +177,115 @@ class EventPageRefreshTest(unittest.TestCase):
 
             archived = root / "archive" / "2026" / "10" / "2026-10-23.png"
             self.assertEqual(archived.read_bytes(), b"fake png")
+
+
+class ModelSelectionTest(unittest.TestCase):
+    def test_ollama_models_are_sorted_and_deduplicated(self):
+        with patch.object(
+            config_ui,
+            "_request_json",
+            return_value={
+                "models": [
+                    {"name": "gemma4:e4b"},
+                    {"name": "qwen3.8:27b-mlx"},
+                    {"name": "gemma4:e4b"},
+                    {"name": "nomic-embed-text:latest", "details": {"family": "nomic-bert"}},
+                    {"name": "x/flux2-klein:4b-fp8"},
+                ]
+            },
+        ):
+            self.assertEqual(
+                config_ui.ollama_models("http://ollama01.example:11434"),
+                ["gemma4:e4b", "qwen3.8:27b-mlx"],
+            )
+
+    def test_openai_image_models_are_filtered(self):
+        with patch.object(
+            config_ui,
+            "_request_json",
+            return_value={"data": [{"id": "gpt-image-2"}, {"id": "gpt-5"}, {"id": "dall-e-3"}]},
+        ) as request_json:
+            self.assertEqual(config_ui.openai_image_models("secret-key"), ["dall-e-3", "gpt-image-2"])
+            self.assertEqual(request_json.call_args.kwargs["headers"]["Authorization"], "Bearer secret-key")
+
+    def test_model_discovery_does_not_return_openai_key(self):
+        with patch.object(config_ui, "ollama_models", side_effect=[["primary-model"], ["fallback-model"]]), \
+                patch.object(config_ui, "openai_image_models", return_value=["gpt-image-2"]):
+            result = config_ui.discover_models(
+                {
+                    "primary_ollama_url": "http://ollama01.example:11434",
+                    "fallback_ollama_url": "http://ollama02.example:11434",
+                    "text_model": "primary-model",
+                    "fallback_text_model": "fallback-model",
+                    "openai_image_model": "gpt-image-2",
+                    "openai_api_key": "secret-key",
+                }
+            )
+
+        serialized = json.dumps(result)
+        self.assertNotIn("secret-key", serialized)
+        self.assertTrue(result["config"]["openai_key_present"])
+        self.assertEqual(result["models"]["openai_image"], ["gpt-image-2"])
+
+    def test_model_save_preserves_existing_options_and_secret(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b"{}"
+        with patch.object(
+            moment_in_history,
+            "_load_addon_options",
+            return_value={"openai_api_key": "secret-key", "other_option": True, "text_model": "old-model"},
+        ), patch.object(moment_in_history, "SUPERVISOR_TOKEN", "supervisor-token"), \
+                patch.object(moment_in_history, "urlopen", return_value=response) as urlopen_mock:
+            moment_in_history.save_model_options({"text_model": "new-model"})
+
+        request = urlopen_mock.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["options"]["text_model"], "new-model")
+        self.assertEqual(payload["options"]["openai_api_key"], "secret-key")
+        self.assertTrue(payload["options"]["other_option"])
+        self.assertEqual(request.get_header("Authorization"), "Bearer supervisor-token")
+
+    def test_ingress_ui_renders_and_saves_model_selection(self):
+        saved: list[dict[str, str]] = []
+        server = config_ui.start_server(
+            port=0,
+            get_options=lambda: {
+                "primary_ollama_url": "",
+                "fallback_ollama_url": "",
+                "text_model": "old-primary",
+                "fallback_text_model": "old-fallback",
+                "openai_image_model": "gpt-image-2",
+            },
+            save_options=saved.append,
+            log=lambda message: None,
+        )
+        port = server.server_address[1]
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/") as response:
+                page = response.read().decode("utf-8")
+            self.assertIn('<select id="primary-model">', page)
+            self.assertIn("Refresh available models", page)
+
+            request = Request(
+                f"http://127.0.0.1:{port}/api/config",
+                data=json.dumps(
+                    {
+                        "text_model": "new-primary",
+                        "fallback_text_model": "new-fallback",
+                        "openai_image_model": "gpt-image-2",
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(payload["restart_required"])
+            self.assertEqual(saved, [{"text_model": "new-primary", "fallback_text_model": "new-fallback", "openai_image_model": "gpt-image-2"}])
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

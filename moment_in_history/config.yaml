@@ -1,11 +1,15 @@
 name: Moment in history
-version: "1.6.0"
+version: "1.7.0"
 slug: moment_in_history
 description: Daily historical moment artwork for the Home Assistant dashboard
 startup: application
 boot: auto
 init: true
 homeassistant_api: true
+hassio_api: true
+hassio_role: default
+ingress: true
+ingress_port: 8099
 arch:
   - amd64
   - aarch64

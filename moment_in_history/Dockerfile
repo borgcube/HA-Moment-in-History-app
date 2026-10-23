@@ -1,7 +1,7 @@
 FROM python:3.13-slim-bookworm
 
 LABEL \
-  io.hass.version="1.6.0" \
+  io.hass.version="1.7.0" \
   io.hass.type="app" \
   io.hass.arch="amd64"
 
@@ -13,5 +13,6 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY moment_in_history.py /app/moment_in_history.py
+COPY config_ui.py /app/config_ui.py
 
 CMD ["python", "/app/moment_in_history.py", "--daemon"]

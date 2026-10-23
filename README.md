@@ -48,6 +48,18 @@ If you maintain a local Home Assistant App repository:
 
 The app needs access to `/config` and writes generated files to `/config/www/moment-in-history/`. It is not a standalone Python script for Home Assistant Container/Core installations.
 
+### Live model selection
+
+The App includes a Home Assistant **Ingress** configuration page. Open the App's **Info** tab and choose **Open Web UI**, then use **Refresh available models** to query:
+
+- the primary Ollama endpoint's `/api/tags` response;
+- the fallback Ollama endpoint's `/api/tags` response; and
+- OpenAI's `/v1/models` endpoint, filtered to image-capable model IDs, when an OpenAI API key is configured.
+
+Choose the primary text model, fallback text model, and OpenAI image model from the resulting dropdowns and select **Save model selection**. The App saves the values through Home Assistant Supervisor and restarts so the new choices become active. The API key is used only inside the App and is never sent to the browser or written to the model-discovery response.
+
+The ordinary App **Configuration** tab remains the source for endpoint URLs and the OpenAI API key. The model text fields remain in the schema for compatibility with existing installations, but the Ingress page is the recommended way to choose valid model IDs without typing them.
+
 ### Automatic updates from GitHub
 
 After installing the App from this GitHub repository, open its **Info** tab and enable **Auto update** if you want Home Assistant Supervisor to update it automatically. This setting belongs to Supervisor, not the App's `config.yaml`; do not add `auto_update` to the App options. Supervisor periodically reloads the App repository and updates when the repository contains a newer App version.
