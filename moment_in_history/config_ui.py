@@ -1529,8 +1529,8 @@ def _page() -> str:
       closeTestEmailDialog();
       await refresh({ silent: true });
       status.textContent = data.mode === 'current'
-        ? 'Test email sent with the current image and event. Daily delivery settings were not changed.'
-        : 'Generic SMTP test email sent. Daily delivery settings were not changed.';
+        ? 'Test email accepted by Home Assistant SMTP with the current image and event. Provider delivery is not confirmed. Daily delivery settings were not changed.'
+        : 'Generic test email accepted by Home Assistant SMTP. Provider delivery is not confirmed. Daily delivery settings were not changed.';
     } catch (error) {
       testEmailStatus.textContent = 'Unable to send test email: ' + error.message;
     } finally {
