@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.15 starting", report)
+            self.assertIn("Moment in history App 1.9.16 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -765,6 +765,47 @@ class ModelSelectionTest(unittest.TestCase):
         self.assertEqual(update_payload["server"], "smtp.new.example.com")
         self.assertEqual(update_payload["password"], "secret-password")
         self.assertNotIn("options", update_payload)
+
+    def test_smtp_details_prefill_from_temporary_reconfigure_form(self):
+        entry = {"domain": "smtp", "entry_id": "smtp-entry"}
+        flow = {
+            "type": "form",
+            "flow_id": "flow-details",
+            "data_schema": [
+                {"name": "sender", "value": "sender@example.com"},
+                {"name": "sender_name", "suggested_value": "Moment in history"},
+                {"name": "server", "value": "smtp.example.com"},
+                {"name": "port", "value": 465},
+                {"name": "encryption", "value": "tls"},
+                {"name": "username", "value": "sender@example.com"},
+                {"name": "verify_ssl", "value": False},
+                {"name": "password", "value": "must-not-be-returned"},
+            ],
+        }
+        with patch.object(
+            config_ui,
+            "_request_json",
+            side_effect=[[entry], flow, {}],
+        ) as request_json:
+            details = config_ui.smtp_config_details(
+                "http://supervisor/core/api",
+                "secret-token",
+            )
+
+        self.assertEqual(details["sender"], "sender@example.com")
+        self.assertEqual(details["sender_name"], "Moment in history")
+        self.assertEqual(details["server"], "smtp.example.com")
+        self.assertEqual(details["port"], 465)
+        self.assertEqual(details["encryption"], "tls")
+        self.assertEqual(details["username"], "sender@example.com")
+        self.assertFalse(details["verify_ssl"])
+        self.assertNotIn("password", details)
+        self.assertEqual(request_json.call_args_list[1].kwargs["payload"], {
+            "handler": "smtp",
+            "entry_id": "smtp-entry",
+        })
+        self.assertEqual(request_json.call_args_list[2].kwargs["method"], "DELETE")
+        self.assertTrue(request_json.call_args_list[2].args[0].endswith("/flow/flow-details"))
 
     def test_smtp_connection_checks_starttls_and_auth_without_sending(self):
         smtp = MagicMock()

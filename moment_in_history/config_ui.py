@@ -72,15 +72,15 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.15",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.16",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
         method=method,
     )
     with urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    return payload
+        body = response.read().decode("utf-8")
+    return json.loads(body) if body.strip() else {}
 
 
 def _safe_error(exc: Exception) -> str:
@@ -376,6 +376,64 @@ def _smtp_config_entries(api_url: str, token: str) -> list[dict[str, Any]]:
     ]
 
 
+_SMTP_EDITABLE_FIELDS = {
+    "sender",
+    "sender_name",
+    "server",
+    "port",
+    "encryption",
+    "username",
+    "verify_ssl",
+}
+
+
+def _smtp_flow_values(flow: dict[str, Any]) -> dict[str, Any]:
+    """Extract non-secret current values from an SMTP reconfigure form."""
+    schema = flow.get("data_schema")
+    if not isinstance(schema, list):
+        return {}
+    values: dict[str, Any] = {}
+    for field in schema:
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name", "")).strip()
+        if name not in _SMTP_EDITABLE_FIELDS:
+            continue
+        if "value" in field:
+            values[name] = field["value"]
+        elif "suggested_value" in field:
+            values[name] = field["suggested_value"]
+    return values
+
+
+def _smtp_reconfigure_values(api_url: str, token: str, entry_id: str) -> dict[str, Any]:
+    """Read current SMTP values through a temporary, cancelled reconfigure flow."""
+    flow = _request_json(
+        f"{api_url.rstrip('/')}/config/config_entries/flow",
+        headers=_home_assistant_headers(token),
+        method="POST",
+        payload={"handler": "smtp", "entry_id": entry_id},
+    )
+    flow_id = str(flow.get("flow_id", "")) if isinstance(flow, dict) else ""
+    if not flow_id:
+        raise RuntimeError("Home Assistant did not start the SMTP details flow")
+    try:
+        if not isinstance(flow, dict) or flow.get("type") != "form":
+            return {}
+        return _smtp_flow_values(flow)
+    finally:
+        # Reading the form creates a real config flow, so always cancel it and
+        # leave the saved SMTP integration untouched.
+        try:
+            _request_json(
+                f"{api_url.rstrip('/')}/config/config_entries/flow/{flow_id}",
+                headers=_home_assistant_headers(token),
+                method="DELETE",
+            )
+        except Exception:
+            pass
+
+
 def smtp_config_details(api_url: str, token: str) -> dict[str, Any]:
     """Return editable SMTP fields without returning the stored password."""
     entries = _smtp_config_entries(api_url, token)
@@ -383,6 +441,14 @@ def smtp_config_details(api_url: str, token: str) -> dict[str, Any]:
         return {"configured": False}
     entry = entries[0]
     data = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+    if not data:
+        # Home Assistant's REST list response deliberately omits config-entry
+        # data.  Use the supported reconfigure flow to obtain the current form
+        # values, then cancel it; never expose or retain the password.
+        try:
+            data = _smtp_reconfigure_values(api_url, token, str(entry.get("entry_id", "")))
+        except Exception:
+            data = {}
     return {
         "configured": True,
         "entry_id": str(entry.get("entry_id", "")),
