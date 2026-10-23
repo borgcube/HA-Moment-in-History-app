@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.18 starting", report)
+            self.assertIn("Moment in history App 1.9.19 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -842,15 +842,17 @@ class ModelSelectionTest(unittest.TestCase):
             storage_path.write_text(
                 json.dumps(
                     {
-                        "data": [
-                            {
-                                "domain": "smtp",
-                                "data": {
-                                    "username": "sender@example.com",
-                                    "password": "saved-password",
-                                },
-                            }
-                        ]
+                        "data": {
+                            "entries": [
+                                {
+                                    "domain": "smtp",
+                                    "data": {
+                                        "username": "sender@example.com",
+                                        "password": "saved-password",
+                                    },
+                                }
+                            ]
+                        }
                     }
                 ),
                 encoding="utf-8",

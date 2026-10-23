@@ -782,7 +782,11 @@ def _saved_smtp_data() -> dict[str, Any]:
         payload = json.loads(SMTP_STORAGE_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    entries = payload.get("data", []) if isinstance(payload, dict) else []
+    stored_data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    if isinstance(stored_data, dict):
+        entries = stored_data.get("entries", [])
+    else:
+        entries = stored_data
     if not isinstance(entries, list):
         return {}
     for entry in entries:
