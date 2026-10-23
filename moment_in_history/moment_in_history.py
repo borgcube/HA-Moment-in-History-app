@@ -101,6 +101,9 @@ ARCHIVE_IMAGES = _setting("MOMENT_ARCHIVE_IMAGES", "archive_images", "false").lo
     "on",
 }
 CONFIG_UI_PORT = int(_setting("MOMENT_CONFIG_UI_PORT", "config_ui_port", "8099"))
+MANAGED_RECIPIENTS_PATH = Path(
+    os.environ.get("MOMENT_MANAGED_RECIPIENTS_FILE", "/data/moment-in-history-managed-recipients.json")
+)
 
 
 def configured_notify_entities() -> list[str]:
@@ -631,6 +634,90 @@ def get_home_assistant_notify_entities() -> list[str]:
     return config_ui.home_assistant_notify_entities(HOME_ASSISTANT_API_URL, SUPERVISOR_TOKEN)
 
 
+def _read_managed_recipients() -> list[dict[str, Any]]:
+    """Read the app-owned email mapping without exposing addresses in logs."""
+    try:
+        payload = json.loads(MANAGED_RECIPIENTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [
+        {
+            "email": str(item.get("email", "")).strip(),
+            "entity_id": str(item.get("entity_id", "")).strip() or None,
+            "entry_id": str(item.get("entry_id", "")).strip(),
+            "subentry_id": str(item.get("subentry_id", "")).strip(),
+        }
+        for item in payload
+        if isinstance(item, dict) and str(item.get("email", "")).strip()
+    ]
+
+
+def _write_managed_recipients(recipients: list[dict[str, Any]]) -> None:
+    MANAGED_RECIPIENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = MANAGED_RECIPIENTS_PATH.with_suffix(".tmp")
+    temporary_path.write_text(json.dumps(recipients, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary_path, MANAGED_RECIPIENTS_PATH)
+
+
+def get_managed_email_recipients() -> dict[str, Any]:
+    """Return only SMTP recipients that this App can safely manage."""
+    details = config_ui.smtp_recipient_details(HOME_ASSISTANT_API_URL, SUPERVISOR_TOKEN)
+    current = {
+        str(item.get("email", "")).casefold(): item
+        for item in details.get("recipients", [])
+        if isinstance(item, dict)
+    }
+    recipients = []
+    for item in _read_managed_recipients():
+        live = current.get(item["email"].casefold())
+        if live:
+            item = {**item, "entity_id": live.get("entity_id") or item.get("entity_id")}
+        recipients.append(
+            {
+                "email": item["email"],
+                "entity_id": item.get("entity_id"),
+            }
+        )
+    return {
+        "available": bool(details.get("available")),
+        "message": details.get("message", ""),
+        "recipients": recipients,
+    }
+
+
+def add_managed_email_recipient(email: str) -> dict[str, Any]:
+    """Create an SMTP recipient and remember the subentry needed to remove it later."""
+    normalized = email.strip()
+    existing = _read_managed_recipients()
+    for item in existing:
+        if item["email"].casefold() == normalized.casefold():
+            return {"email": item["email"], "entity_id": item.get("entity_id")}
+    recipient = config_ui.add_smtp_recipient(HOME_ASSISTANT_API_URL, SUPERVISOR_TOKEN, normalized)
+    record = {
+        "email": str(recipient["email"]),
+        "entity_id": str(recipient.get("entity_id", "")) or None,
+        "entry_id": str(recipient.get("entry_id", "")),
+        "subentry_id": str(recipient.get("subentry_id", "")),
+    }
+    _write_managed_recipients(existing + [record])
+    log(f"Managed SMTP recipient added ({record['entity_id'] or 'entity pending'})")
+    return {"email": record["email"], "entity_id": record["entity_id"]}
+
+
+def remove_managed_email_recipient(email: str) -> None:
+    """Remove an App-managed SMTP recipient through Home Assistant's API."""
+    normalized = email.strip()
+    existing = _read_managed_recipients()
+    record = next((item for item in existing if item["email"].casefold() == normalized.casefold()), None)
+    if record is None:
+        raise ValueError("That email address is not managed by this App")
+    config_ui.delete_smtp_recipient(HOME_ASSISTANT_API_URL, SUPERVISOR_TOKEN, record)
+    _write_managed_recipients([item for item in existing if item is not record])
+    log(f"Managed SMTP recipient removed ({record.get('entity_id') or 'entity pending'})")
+
+
 def start_config_ui() -> None:
     """Start the Ingress-only model selection page."""
     try:
@@ -640,6 +727,9 @@ def start_config_ui() -> None:
             save_options=save_model_options,
             log=log,
             get_notify_entities=get_home_assistant_notify_entities,
+            get_managed_recipients=get_managed_email_recipients,
+            add_email_recipient=add_managed_email_recipient,
+            remove_email_recipient=remove_managed_email_recipient,
         )
         log(f"Configuration UI: Home Assistant Ingress listening on port {CONFIG_UI_PORT}")
     except OSError as exc:

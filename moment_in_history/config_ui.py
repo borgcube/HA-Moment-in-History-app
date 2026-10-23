@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import socket
+import ssl
+import struct
+import time
+from base64 import b64encode
+from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -17,16 +24,27 @@ SELECTABLE_FIELDS = MODEL_FIELDS + ("email_notify_entity",)
 MAX_REQUEST_BYTES = 16 * 1024
 
 
-def _request_json(url: str, *, headers: dict[str, str] | None = None) -> Any:
+def _request_json(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    method: str = "GET",
+    payload: Any = None,
+    timeout: int = 15,
+) -> Any:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = Request(
         url,
+        data=data,
         headers={
             "Accept": "application/json",
             "User-Agent": "BORGcube-MomentInHistory/1.8",
+            **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
+        method=method,
     )
-    with urlopen(request, timeout=15) as response:
+    with urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
     return payload
 
@@ -186,6 +204,281 @@ def home_assistant_notify_entities(api_url: str, supervisor_token: str) -> list[
     )
 
 
+def _home_assistant_headers(token: str) -> dict[str, str]:
+    if not token.strip():
+        raise RuntimeError("Home Assistant API token is unavailable")
+    return {"Authorization": f"Bearer {token.strip()}"}
+
+
+def _smtp_config_entries(api_url: str, token: str) -> list[dict[str, Any]]:
+    payload = _request_json(
+        f"{api_url.rstrip('/')}/config/config_entries/entry?domain=smtp",
+        headers=_home_assistant_headers(token),
+    )
+    if not isinstance(payload, list):
+        raise ValueError("Home Assistant returned an invalid SMTP entry list")
+    return [
+        entry
+        for entry in payload
+        if isinstance(entry, dict) and str(entry.get("domain", "")) == "smtp"
+    ]
+
+
+def _websocket_url(api_url: str) -> tuple[str, str, int | None, str]:
+    parsed = urlsplit(api_url.rstrip("/"))
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Home Assistant API URL must use http or https")
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    path = parsed.path.removesuffix("/api").rstrip("/") + "/websocket"
+    return scheme, parsed.hostname, parsed.port, path or "/websocket"
+
+
+def _websocket_send(sock: socket.socket, payload: dict[str, Any]) -> None:
+    _websocket_send_frame(sock, json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+
+
+def _websocket_send_frame(sock: socket.socket, body: bytes, opcode: int = 1) -> None:
+    mask = os.urandom(4)
+    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(body))
+    length = len(masked)
+    if length < 126:
+        header = bytes((0x80 | opcode, 0x80 | length))
+    elif length < 65536:
+        header = bytes((0x80 | opcode, 0x80 | 126)) + struct.pack("!H", length)
+    else:
+        header = bytes((0x80 | opcode, 0x80 | 127)) + struct.pack("!Q", length)
+    sock.sendall(header + mask + masked)
+
+
+def _websocket_receive(sock: socket.socket) -> tuple[int, bytes]:
+    header = _read_exact(sock, 2)
+    first, second = header
+    length = second & 0x7F
+    if length == 126:
+        length = struct.unpack("!H", _read_exact(sock, 2))[0]
+    elif length == 127:
+        length = struct.unpack("!Q", _read_exact(sock, 8))[0]
+    mask = _read_exact(sock, 4) if second & 0x80 else None
+    body = _read_exact(sock, length)
+    if mask:
+        body = bytes(value ^ mask[index % 4] for index, value in enumerate(body))
+    return first & 0x0F, body
+
+
+def _read_exact(sock: socket.socket, size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise RuntimeError("Home Assistant WebSocket closed unexpectedly")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+class _BufferedSocket:
+    """Expose handshake bytes already read before WebSocket framing starts."""
+
+    def __init__(self, sock: socket.socket, buffered: bytes) -> None:
+        self._sock = sock
+        self._buffered = bytearray(buffered)
+
+    def recv(self, size: int) -> bytes:
+        if self._buffered:
+            chunk = bytes(self._buffered[:size])
+            del self._buffered[:size]
+            return chunk
+        return self._sock.recv(size)
+
+    def sendall(self, data: bytes) -> None:
+        self._sock.sendall(data)
+
+    def close(self) -> None:
+        self._sock.close()
+
+
+def _websocket_command(
+    api_url: str,
+    token: str,
+    message: dict[str, Any],
+    *,
+    timeout: int = 15,
+) -> Any:
+    """Run one authenticated Home Assistant WebSocket command with stdlib only."""
+    scheme, host, port, path = _websocket_url(api_url)
+    connection = socket.create_connection((host, port or (443 if scheme == "wss" else 80)), timeout=timeout)
+    connection.settimeout(timeout)
+    if scheme == "wss":
+        connection = ssl.create_default_context().wrap_socket(connection, server_hostname=host)
+    key = b64encode(os.urandom(16)).decode("ascii")
+    host_header = host if port is None else f"{host}:{port}"
+    request = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host_header}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
+    ).encode("ascii")
+    try:
+        connection.sendall(request)
+        response = b""
+        while b"\r\n\r\n" not in response:
+            response += connection.recv(4096)
+            if len(response) > 32 * 1024:
+                raise RuntimeError("Home Assistant WebSocket handshake was too large")
+        header, buffered = response.split(b"\r\n\r\n", 1)
+        if not header.startswith(b"HTTP/1.1 101"):
+            raise RuntimeError("Home Assistant WebSocket handshake was rejected")
+        response_headers = {
+            line.partition(b":")[0].strip().lower(): line.partition(b":")[2].strip()
+            for line in header.split(b"\r\n")[1:]
+            if b":" in line
+        }
+        expected_accept = b64encode(sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest())
+        if response_headers.get(b"sec-websocket-accept") != expected_accept:
+            raise RuntimeError("Home Assistant WebSocket handshake was invalid")
+        connection = _BufferedSocket(connection, buffered)
+
+        opcode, body = _websocket_receive(connection)
+        if opcode != 1 or json.loads(body).get("type") != "auth_required":
+            raise RuntimeError("Home Assistant WebSocket authentication was not requested")
+        _websocket_send(connection, {"type": "auth", "access_token": token.strip()})
+        opcode, body = _websocket_receive(connection)
+        auth = json.loads(body) if opcode == 1 else {}
+        if auth.get("type") != "auth_ok":
+            raise RuntimeError("Home Assistant WebSocket authentication failed")
+
+        command = {"id": 1, **message}
+        _websocket_send(connection, command)
+        while True:
+            opcode, body = _websocket_receive(connection)
+            if opcode == 9:
+                _websocket_send_frame(connection, body, opcode=10)
+                continue
+            if opcode != 1:
+                continue
+            result = json.loads(body)
+            if result.get("type") != "result" or result.get("id") != 1:
+                continue
+            if not result.get("success"):
+                error = result.get("error") or {}
+                raise RuntimeError(str(error.get("message", "Home Assistant command failed")))
+            return result.get("result")
+    finally:
+        connection.close()
+
+
+def _home_assistant_states(api_url: str, token: str) -> list[dict[str, Any]]:
+    payload = _request_json(
+        f"{api_url.rstrip('/')}/states",
+        headers=_home_assistant_headers(token),
+    )
+    states = payload if isinstance(payload, list) else payload.get("states", []) if isinstance(payload, dict) else []
+    return [state for state in states if isinstance(state, dict)]
+
+
+def _find_notify_entity(states: list[dict[str, Any]], email: str) -> str | None:
+    normalized = email.casefold()
+    for state in states:
+        entity_id = str(state.get("entity_id", ""))
+        attributes = state.get("attributes") or {}
+        friendly_name = str(attributes.get("friendly_name", ""))
+        if entity_id.startswith("notify.") and friendly_name.casefold() == normalized:
+            return entity_id
+    return None
+
+
+def smtp_recipient_details(api_url: str, token: str) -> dict[str, Any]:
+    """Return SMTP recipient subentries and their current notify entity IDs."""
+    entries = _smtp_config_entries(api_url, token)
+    if not entries:
+        return {"available": False, "message": "No Home Assistant SMTP integration is configured.", "recipients": []}
+    states = _home_assistant_states(api_url, token)
+    recipients: list[dict[str, Any]] = []
+    for entry in entries:
+        entry_id = str(entry.get("entry_id", ""))
+        subentries = _websocket_command(
+            api_url,
+            token,
+            {"type": "config_entries/subentries/list", "entry_id": entry_id},
+        )
+        for subentry in subentries or []:
+            if not isinstance(subentry, dict) or subentry.get("subentry_type") != "recipient":
+                continue
+            email = str(subentry.get("unique_id", "")).strip()
+            recipients.append(
+                {
+                    "email": email,
+                    "entity_id": _find_notify_entity(states, email),
+                    "entry_id": entry_id,
+                    "subentry_id": str(subentry.get("subentry_id", "")),
+                }
+            )
+    return {"available": True, "message": "SMTP recipients are managed by Home Assistant.", "recipients": recipients}
+
+
+def add_smtp_recipient(api_url: str, token: str, email: str) -> dict[str, Any]:
+    """Create one recipient through Home Assistant's supported SMTP config flow."""
+    email = email.strip()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError("Enter a valid email address")
+    entries = _smtp_config_entries(api_url, token)
+    if not entries:
+        raise RuntimeError("Configure the Home Assistant SMTP integration first")
+    details = smtp_recipient_details(api_url, token)
+    for recipient in details["recipients"]:
+        if recipient["email"].casefold() == email.casefold():
+            if not recipient.get("entity_id"):
+                raise RuntimeError("Home Assistant created the recipient but its notify entity is not ready yet")
+            return recipient
+    entry_id = str(entries[0].get("entry_id", ""))
+    flow = _request_json(
+        f"{api_url.rstrip('/')}/config/config_entries/subentries/flow",
+        headers=_home_assistant_headers(token),
+        method="POST",
+        payload={"handler": [entry_id, "recipient"]},
+    )
+    flow_id = str(flow.get("flow_id", "")) if isinstance(flow, dict) else ""
+    if not flow_id:
+        raise RuntimeError("Home Assistant did not start the SMTP recipient flow")
+    result = _request_json(
+        f"{api_url.rstrip('/')}/config/config_entries/subentries/flow/{flow_id}",
+        headers=_home_assistant_headers(token),
+        method="POST",
+        payload={"user_input": {"recipient": email}},
+    )
+    if not isinstance(result, dict) or result.get("type") != "create_entry":
+        reason = result.get("reason", "Home Assistant rejected the recipient") if isinstance(result, dict) else "Home Assistant rejected the recipient"
+        raise RuntimeError(str(reason))
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        details = smtp_recipient_details(api_url, token)
+        for recipient in details["recipients"]:
+            if recipient["email"].casefold() == email.casefold() and recipient.get("entity_id"):
+                return recipient
+        time.sleep(0.5)
+    raise RuntimeError("Recipient was added, but Home Assistant did not expose its notify entity yet")
+
+
+def delete_smtp_recipient(api_url: str, token: str, recipient: dict[str, Any]) -> None:
+    """Delete only the SMTP subentry previously selected by the user."""
+    entry_id = str(recipient.get("entry_id", ""))
+    subentry_id = str(recipient.get("subentry_id", ""))
+    if not entry_id or not subentry_id:
+        raise RuntimeError("This recipient was not created through the supported SMTP flow")
+    _websocket_command(
+        api_url,
+        token,
+        {
+            "type": "config_entries/subentries/delete",
+            "entry_id": entry_id,
+            "subentry_id": subentry_id,
+        },
+    )
+
+
 def _page() -> str:
     return """<!doctype html>
 <html lang="en">
@@ -202,11 +495,17 @@ def _page() -> str:
     h2 { font-size: 1.1rem; margin: 0 0 8px; }
     p, label { color: #d1d5db; }
     label { display: block; margin: 14px 0 6px; }
-    select, button { box-sizing: border-box; width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #4b5563; font: inherit; }
-    select { background: #111827; color: #f9fafb; }
+    select, input, button { box-sizing: border-box; width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #4b5563; font: inherit; }
+    select, input { background: #111827; color: #f9fafb; }
     button { background: #d9a441; border-color: #d9a441; color: #111827; cursor: pointer; font-weight: 700; margin-top: 10px; }
     button.secondary { background: transparent; color: #f9fafb; }
-    button:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
+    button:disabled, select:disabled, input:disabled { opacity: .55; cursor: not-allowed; }
+    .recipient-row { display: flex; gap: 8px; align-items: center; }
+    .recipient-row input { flex: 1; }
+    .recipient-row button { width: auto; min-width: 92px; margin-top: 0; }
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .pill { display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 999px; background: #374151; color: #f9fafb; font-size: .9rem; }
+    .pill button { width: auto; min-width: 0; padding: 0 2px; margin: 0; border: 0; background: transparent; color: #fca5a5; font-size: 1.1rem; line-height: 1; }
     .url, .status, .error { overflow-wrap: anywhere; font-size: .9rem; }
     .url { color: #9ca3af; }
     .status { min-height: 1.4em; margin-top: 12px; }
@@ -238,9 +537,16 @@ def _page() -> str:
 
   <section>
     <h2>Email delivery</h2>
-    <p class="hint" id="email-status">Configure Home Assistant SMTP and add at least one recipient before selecting an email target.</p>
-    <label for="email-entity">SMTP notify entity</label>
+    <p class="hint" id="email-status">Configure Home Assistant SMTP first. Existing notify entities can be selected below.</p>
+    <label for="email-entity">Existing Home Assistant notify entities</label>
     <select id="email-entity" multiple size="4"></select>
+    <label for="email-recipient">Add an SMTP email recipient</label>
+    <div class="recipient-row">
+      <input id="email-recipient" type="text" inputmode="email" autocomplete="email" placeholder="name@example.com — press Space or Enter">
+      <button id="add-email" type="button">Add email</button>
+    </div>
+    <div class="pills" id="managed-recipients" aria-live="polite"></div>
+    <p class="hint">Added addresses are created through Home Assistant’s SMTP integration. Removing a pill removes only the SMTP recipient created through this page. Select Save selections to apply delivery targets.</p>
   </section>
 
   <button class="secondary" id="refresh" type="button">Refresh available models and notifications</button>
@@ -258,6 +564,7 @@ def _page() -> str:
   ];
   const status = document.getElementById('status');
   const errors = document.getElementById('errors');
+  const emailRecipient = document.getElementById('email-recipient');
   function apiPath(path) {
     let base = window.location.pathname;
     if (!base.endsWith('/')) base += '/';
@@ -287,12 +594,30 @@ def _page() -> str:
     fill(fields[2], config.openai_image_model, models.openai_image || [], !config.openai_key_present);
     const email = data.email || {};
     fill(fields[3], config.email_notify_entity, email.notify_entities || [], false);
+    const managed = email.managed_recipients || [];
+    const pills = document.getElementById('managed-recipients');
+    pills.replaceChildren();
+    managed.forEach(function (recipient) {
+      const pill = document.createElement('span');
+      pill.className = 'pill';
+      const label = document.createElement('span');
+      label.textContent = recipient.email + (recipient.entity_id ? ' → ' + recipient.entity_id : ' (waiting for Home Assistant)');
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.title = 'Remove ' + recipient.email;
+      remove.addEventListener('click', function () { removeEmail(recipient.email); });
+      pill.append(label, remove);
+      pills.appendChild(pill);
+    });
     document.getElementById('openai-status').textContent = config.openai_key_present
       ? 'Image models visible to the configured API key are listed below.'
       : 'Enter an OpenAI API key in App Configuration first, then refresh this page.';
-    document.getElementById('email-status').textContent = email.notify_entities && email.notify_entities.length
-      ? 'Choose one or more SMTP recipient entities that should receive generated images.'
-      : 'No notify entities were found. Configure Home Assistant SMTP and add a recipient first.';
+    document.getElementById('email-status').textContent = email.management_available
+      ? (email.notify_entities && email.notify_entities.length
+        ? 'Choose one or more notify entities, or add an SMTP email address below.'
+        : 'No notify entities were found yet. Add an SMTP email address below or configure one in Home Assistant.')
+      : (email.management_message || 'Automatic SMTP recipient management is unavailable; choose an existing notify entity instead.');
     errors.replaceChildren();
     Object.keys(data.errors || {}).forEach(function (key) {
       const item = document.createElement('div');
@@ -309,8 +634,48 @@ def _page() -> str:
       if (!response.ok) throw new Error(data.error || 'model discovery failed');
       render(data);
       status.textContent = 'Model lists refreshed.';
+      return data;
     } catch (error) {
       status.textContent = 'Unable to query models: ' + error.message;
+    }
+  }
+  async function manageEmail(action, email) {
+    const response = await fetch(apiPath('api/email-recipient'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action, email: email })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'email recipient update failed');
+    return data;
+  }
+  async function addEmail() {
+    const email = emailRecipient.value.trim();
+    if (!email) return;
+    status.textContent = 'Adding the SMTP recipient through Home Assistant…';
+    try {
+      const result = await manageEmail('add', email);
+      emailRecipient.value = '';
+      await refresh();
+      const entityId = result.recipient && result.recipient.entity_id;
+      if (entityId) {
+        const select = document.getElementById('email-entity');
+        Array.from(select.options).forEach(function (option) { if (option.value === entityId) option.selected = true; });
+      }
+      status.textContent = 'Recipient added. Select Save selections to enable delivery to it.';
+    } catch (error) {
+      status.textContent = 'Unable to add recipient: ' + error.message;
+    }
+  }
+  async function removeEmail(email) {
+    if (!window.confirm('Remove the SMTP recipient ' + email + '?')) return;
+    status.textContent = 'Removing the SMTP recipient from Home Assistant…';
+    try {
+      await manageEmail('remove', email);
+      await refresh();
+      status.textContent = 'Recipient removed. Select Save selections to update delivery targets.';
+    } catch (error) {
+      status.textContent = 'Unable to remove recipient: ' + error.message;
     }
   }
   async function save() {
@@ -337,6 +702,13 @@ def _page() -> str:
   }
   document.getElementById('refresh').addEventListener('click', refresh);
   document.getElementById('save').addEventListener('click', save);
+  document.getElementById('add-email').addEventListener('click', addEmail);
+  emailRecipient.addEventListener('keydown', function (event) {
+    if (event.key === ' ' || event.key === 'Enter' || event.key === ',') {
+      event.preventDefault();
+      addEmail();
+    }
+  });
   refresh();
 }());
 </script>
@@ -352,6 +724,9 @@ def start_server(
     save_options: Callable[[dict[str, str]], None],
     log: Callable[[str], None],
     get_notify_entities: Callable[[], list[str]] | None = None,
+    get_managed_recipients: Callable[[], dict[str, Any]] | None = None,
+    add_email_recipient: Callable[[str], dict[str, Any]] | None = None,
+    remove_email_recipient: Callable[[str], None] | None = None,
 ) -> ThreadingHTTPServer:
     """Start the authenticated-by-Ingress configuration server."""
 
@@ -388,12 +763,30 @@ def start_server(
             if path == "/api/models":
                 try:
                     result = discover_models(get_options())
-                    result["email"] = {"notify_entities": []}
+                    result["email"] = {
+                        "notify_entities": [],
+                        "managed_recipients": [],
+                        "management_available": bool(get_managed_recipients),
+                    }
                     if get_notify_entities:
                         try:
                             result["email"]["notify_entities"] = get_notify_entities()
                         except Exception as exc:  # noqa: BLE001 - show a safe UI diagnostic
                             result["errors"]["email"] = _safe_error(exc)
+                    if get_managed_recipients:
+                        try:
+                            managed = get_managed_recipients()
+                            result["email"].update(
+                                {
+                                    "managed_recipients": managed.get("recipients", []),
+                                    "management_available": bool(managed.get("available")),
+                                    "management_message": str(managed.get("message", "")),
+                                }
+                            )
+                        except Exception as exc:  # noqa: BLE001 - show a safe UI diagnostic
+                            result["email"]["management_available"] = False
+                            result["email"]["management_message"] = "Automatic SMTP recipient management is unavailable."
+                            result["errors"]["email_management"] = _safe_error(exc)
                     self._json(200, result)
                 except Exception as exc:  # noqa: BLE001 - return a safe diagnostic
                     log(f"Configuration UI model discovery failed: {_safe_error(exc)}")
@@ -405,7 +798,8 @@ def start_server(
             if not self._allowed_client():
                 self._json(403, {"error": "Ingress access required"})
                 return
-            if urlsplit(self.path).path != "/api/config":
+            path = urlsplit(self.path).path
+            if path not in {"/api/config", "/api/email-recipient"}:
                 self._not_found()
                 return
             try:
@@ -415,6 +809,18 @@ def start_server(
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("request must be an object")
+                if path == "/api/email-recipient":
+                    action = str(payload.get("action", "")).strip().lower()
+                    email = str(payload.get("email", "")).strip()
+                    if action == "add" and add_email_recipient:
+                        recipient = add_email_recipient(email)
+                        self._json(200, {"recipient": recipient})
+                        return
+                    if action == "remove" and remove_email_recipient:
+                        remove_email_recipient(email)
+                        self._json(200, {"removed": email})
+                        return
+                    raise ValueError("automatic SMTP recipient management is unavailable")
                 changes = {
                     field: str(payload[field]).strip()
                     for field in SELECTABLE_FIELDS

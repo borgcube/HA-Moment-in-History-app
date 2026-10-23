@@ -56,7 +56,7 @@ The App includes a Home Assistant **Ingress** configuration page. Open the App's
 - the fallback Ollama endpoint's `/api/tags` response; and
 - OpenAI's `/v1/models` endpoint, filtered to image-capable model IDs, when an OpenAI API key is configured.
 
-Choose the primary text model, fallback text model, OpenAI image model, and one or more SMTP recipient entities from the resulting dropdowns and select **Save selections**. The App saves the values through Home Assistant Supervisor and restarts so the new choices become active. The API key is used only inside the App and is never sent to the browser or written to the model-discovery response.
+Choose the primary text model, fallback text model, OpenAI image model, and one or more notification entities from the resulting dropdowns and select **Save selections**. The App saves the values through Home Assistant Supervisor and restarts so the new choices become active. The API key is used only inside the App and is never sent to the browser or written to the model-discovery response.
 
 The ordinary App **Configuration** tab remains the source for endpoint URLs and the OpenAI API key. The model text fields remain in the schema for compatibility with existing installations, but the Ingress page is the recommended way to choose valid model IDs without typing them.
 
@@ -117,7 +117,9 @@ Set it up before enabling email delivery:
 1. Go to **Settings → Devices & services → Add integration → SMTP**.
 2. Enter the SMTP account details and complete the integration setup.
 3. Add one or more recipients to the SMTP integration. Home Assistant creates a `notify.*` entity for each recipient.
-4. Open **Moment in history → Info → Open Web UI**, refresh the model and notification lists, and select one or more SMTP recipient entities under **Email delivery**.
+4. Open **Moment in history → Info → Open Web UI** and refresh the model and notification lists. All current `notify.*` entities are available in the multi-select under **Email delivery**.
+
+The same page can manage SMTP recipients for you. Type an email address and press Space, Enter, or **Add email**. The page uses Home Assistant's supported SMTP config-flow API to create the recipient, waits for its `notify.*` entity, and shows an email-to-entity pill. Removing that pill removes the corresponding SMTP recipient through Home Assistant. The App records only the non-secret mapping needed to manage recipients in its persistent `/data` area; it does not copy SMTP credentials. If the installed Home Assistant version does not expose the supported config-flow API, automatic management is disabled and the existing `notify.*` dropdown remains available. This follows Home Assistant's documented config-flow and subentry model rather than editing `.storage` files directly; see the [Home Assistant config-flow documentation](https://developers.home-assistant.io/docs/core/integration/config_flow/).
 
 The App also accepts a comma-separated list of recipient entity IDs, for example `notify.moment_in_history_recipient,notify.second_recipient`. The App no longer stores SMTP hostnames, usernames, passwords, TLS settings, or raw email addresses. If no recipient entity is selected, email delivery remains disabled.
 

@@ -203,6 +203,32 @@ class EventPageRefreshTest(unittest.TestCase):
             archived = root / "archive" / "2026" / "10" / "2026-10-23.png"
             self.assertEqual(archived.read_bytes(), b"fake png")
 
+    def test_managed_email_mapping_removes_only_the_selected_smtp_subentry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            mapping_path = Path(directory) / "managed-recipients.json"
+            recipient = {
+                "email": "person@example.com",
+                "entity_id": "notify.person",
+                "entry_id": "smtp-entry",
+                "subentry_id": "smtp-recipient",
+            }
+            with patch.object(moment_in_history, "MANAGED_RECIPIENTS_PATH", mapping_path), \
+                    patch.object(moment_in_history.config_ui, "add_smtp_recipient", return_value=recipient), \
+                    patch.object(moment_in_history.config_ui, "delete_smtp_recipient") as delete_recipient, \
+                    patch.object(moment_in_history, "HOME_ASSISTANT_API_URL", "http://supervisor/core/api"), \
+                    patch.object(moment_in_history, "SUPERVISOR_TOKEN", "supervisor-token"), \
+                    patch.object(moment_in_history, "log"):
+                self.assertEqual(
+                    moment_in_history.add_managed_email_recipient("person@example.com"),
+                    {"email": "person@example.com", "entity_id": "notify.person"},
+                )
+                moment_in_history.remove_managed_email_recipient("person@example.com")
+
+            delete_recipient.assert_called_once_with(
+                "http://supervisor/core/api", "supervisor-token", recipient
+            )
+            self.assertEqual(json.loads(mapping_path.read_text(encoding="utf-8")), [])
+
 
 class ModelSelectionTest(unittest.TestCase):
     def test_ollama_models_are_sorted_and_deduplicated(self):
@@ -266,6 +292,88 @@ class ModelSelectionTest(unittest.TestCase):
                 config_ui.home_assistant_notify_entities("http://supervisor/core/api", "secret-token"),
                 ["notify.email_recipient", "notify.telegram"],
             )
+
+    def test_supported_smtp_flow_creates_and_maps_a_recipient(self):
+        entry = {"domain": "smtp", "entry_id": "smtp-entry"}
+        states = [{"entity_id": "notify.already_here", "attributes": {"friendly_name": "already@example.com"}}]
+        created_states = [{"entity_id": "notify.new_recipient", "attributes": {"friendly_name": "new@example.com"}}]
+        with patch.object(
+            config_ui,
+            "_request_json",
+            side_effect=[
+                [entry],
+                [entry],
+                states,
+                {"flow_id": "flow-1"},
+                {"type": "create_entry"},
+                [entry],
+                created_states,
+            ],
+        ), patch.object(
+            config_ui,
+            "_websocket_command",
+            side_effect=[
+                [{"subentry_id": "subentry-1", "subentry_type": "recipient", "title": "already@example.com", "unique_id": "already@example.com"}],
+                [{"subentry_id": "subentry-2", "subentry_type": "recipient", "title": "new@example.com", "unique_id": "new@example.com"}],
+            ]
+        ):
+            recipient = config_ui.add_smtp_recipient(
+                "http://supervisor/core/api", "secret-token", "new@example.com"
+            )
+
+        self.assertEqual(
+            recipient,
+            {
+                "email": "new@example.com",
+                "entity_id": "notify.new_recipient",
+                "entry_id": "smtp-entry",
+                "subentry_id": "subentry-2",
+            },
+        )
+
+    def test_ingress_ui_manages_email_recipient_endpoint(self):
+        added: list[str] = []
+        removed: list[str] = []
+        server = config_ui.start_server(
+            port=0,
+            get_options=lambda: {"primary_ollama_url": "", "fallback_ollama_url": ""},
+            save_options=lambda changes: None,
+            log=lambda message: None,
+            get_notify_entities=lambda: ["notify.email_recipient"],
+            get_managed_recipients=lambda: {
+                "available": True,
+                "message": "SMTP recipients are managed by Home Assistant.",
+                "recipients": [{"email": "managed@example.com", "entity_id": "notify.managed"}],
+            },
+            add_email_recipient=lambda email: (added.append(email) or {"email": email, "entity_id": "notify.added"}),
+            remove_email_recipient=lambda email: removed.append(email),
+        )
+        port = server.server_address[1]
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/api/models") as response:
+                discovery = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(discovery["email"]["managed_recipients"][0]["email"], "managed@example.com")
+            request = Request(
+                f"http://127.0.0.1:{port}/api/email-recipient",
+                data=json.dumps({"action": "add", "email": "new@example.com"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request) as response:
+                self.assertEqual(json.loads(response.read().decode("utf-8"))["recipient"]["entity_id"], "notify.added")
+            request = Request(
+                f"http://127.0.0.1:{port}/api/email-recipient",
+                data=json.dumps({"action": "remove", "email": "new@example.com"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request):
+                pass
+            self.assertEqual(added, ["new@example.com"])
+            self.assertEqual(removed, ["new@example.com"])
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_model_save_preserves_existing_options_and_secret(self):
         response = MagicMock()

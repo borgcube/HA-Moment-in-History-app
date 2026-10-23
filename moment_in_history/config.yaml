@@ -33,7 +33,8 @@ options:
   image_width: 1024
   image_height: 1024
   image_steps: 9
-  # Use one or more comma-separated notify entities created by Home Assistant's SMTP integration.
+  # Optional fallback/advanced setting. Use one or more comma-separated notify entities;
+  # the Ingress UI can create SMTP recipients and select them for you.
   email_notify_entity: ""
   email_camera_entity: camera.moment_in_history
   archive_images: false
