@@ -18,6 +18,7 @@ import json
 import os
 import re
 import smtplib
+import sys
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -27,10 +28,13 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
+APP_VERSION = "1.5.0"
+POLL_INTERVAL_SECONDS = 30
 
 
 def _load_addon_options() -> dict[str, Any]:
@@ -477,8 +481,58 @@ def write_event_pages(metadata: dict[str, Any]) -> None:
     )
 def log(message: str) -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
-    with LOG_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(f"{datetime.now(TIME_ZONE).isoformat()} {message}\n")
+    line = f"{datetime.now(TIME_ZONE).isoformat()} {message}"
+    try:
+        with LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError as exc:
+        print(f"{line} [file log unavailable: {exc}]", file=sys.stderr, flush=True)
+    print(line, flush=True)
+
+
+def endpoint_host(value: str) -> str:
+    """Return only the host portion so startup logs never expose URL credentials."""
+    parsed = urlsplit(value)
+    return parsed.hostname or value.split("/", 1)[0]
+
+
+def startup_report(mode: str) -> None:
+    """Write an actionable, secret-free startup report for Supervisor and users."""
+    ROOT.mkdir(parents=True, exist_ok=True)
+    recipients = [clean_text(value) for value in EMAIL_RECIPIENTS.split(",") if clean_text(value)]
+    if recipients:
+        email_status = (
+            f"enabled ({len(recipients)} recipient(s), server={endpoint_host(EMAIL_SMTP_HOST)}:"
+            f"{EMAIL_SMTP_PORT}, tls={EMAIL_SMTP_USE_TLS}, ssl={EMAIL_SMTP_USE_SSL})"
+            if EMAIL_SMTP_HOST
+            else "misconfigured (recipients set but SMTP host is empty)"
+        )
+    else:
+        email_status = "disabled (no recipients configured)"
+
+    log(f"Moment in history App {APP_VERSION} starting (mode={mode})")
+    log(
+        f"Runtime ready: timezone={TIME_ZONE.key}, poll_interval={POLL_INTERVAL_SECONDS}s, "
+        f"schedule_time={SCHEDULE_TIME}, generate_on_restart={GENERATE_ON_RESTART}"
+    )
+    log(
+        f"Text service configured: primary={endpoint_host(OLLAMA_BASE_URL)} "
+        f"model={TEXT_MODEL}; fallback={endpoint_host(OLLAMA_FALLBACK_URL)} "
+        f"model={FALLBACK_TEXT_MODEL}"
+    )
+    log(
+        f"Image service configured: provider={IMAGE_PROVIDER}, openai_model={OPENAI_IMAGE_MODEL}, "
+        f"openai_key={'present' if OPENAI_API_KEY else 'missing'}, "
+        f"lan_backend={endpoint_host(IMAGE_BACKEND_URL)}"
+    )
+    log(f"Email delivery: {email_status}")
+    log(
+        f"Output ready: root={ROOT}, image={IMAGE_PATH.name}, metadata={EVENT_JSON_PATH.name}, "
+        f"disclosure={EVENT_HTML_PATH.name}, log={LOG_PATH.name}"
+    )
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", SCHEDULE_TIME):
+        log(f"Startup warning: schedule_time={SCHEDULE_TIME!r} is not valid HH:MM")
+    log("Startup complete: daemon is ready for its daily schedule")
 
 
 def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
@@ -587,6 +641,7 @@ def main() -> int:
     parser.add_argument("--daemon", action="store_true", help="Run continuously and generate once per day")
     args = parser.parse_args()
     ROOT.mkdir(parents=True, exist_ok=True)
+    startup_report("daemon" if args.daemon else "one-shot")
     if args.daemon:
         return daemon()
     target_day = date.fromisoformat(args.date) if args.date else datetime.now(TIME_ZONE).date()
@@ -620,6 +675,7 @@ def daemon() -> int:
     last_attempt_date: date | None = None
     last_attempt_at = 0.0
     startup_pending = True
+    initial_status_logged = False
     while True:
         now = datetime.now(TIME_ZONE)
         today = now.date()
@@ -629,6 +685,17 @@ def daemon() -> int:
             generated_date = None
         schedule_reached = now.strftime("%H:%M") >= SCHEDULE_TIME
         should_run = should_generate_today(generated_date, today, schedule_reached, startup_pending)
+        if not initial_status_logged:
+            if generated_date == today:
+                log(f"Startup state: today's image is already present ({today.isoformat()}); no generation needed")
+            elif startup_pending and not GENERATE_ON_RESTART:
+                log(
+                    f"Startup state: today's image is not present; restart generation is disabled; "
+                    f"waiting for schedule_time={SCHEDULE_TIME}"
+                )
+            elif not schedule_reached:
+                log(f"Startup state: waiting for schedule_time={SCHEDULE_TIME}; current_time={now.strftime('%H:%M')}")
+            initial_status_logged = True
         retry_allowed = last_attempt_date != today or time.time() - last_attempt_at >= 900
         if should_run and retry_allowed:
             last_attempt_date = today
@@ -641,7 +708,7 @@ def daemon() -> int:
             except Exception as exc:  # noqa: BLE001 - daemon logs and retries
                 log(f"Daily generation failed: {exc}")
         startup_pending = False
-        time.sleep(30)
+        time.sleep(POLL_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

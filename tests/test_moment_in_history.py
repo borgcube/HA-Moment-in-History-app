@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -12,6 +14,40 @@ import moment_in_history  # noqa: E402
 
 
 class EventPageRefreshTest(unittest.TestCase):
+    def test_log_writes_file_and_supervisor_stdout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stdout = io.StringIO()
+            with patch.object(moment_in_history, "ROOT", root), \
+                    patch.object(moment_in_history, "LOG_PATH", root / "generation.log"), \
+                    contextlib.redirect_stdout(stdout):
+                moment_in_history.log("startup test message")
+
+            self.assertIn("startup test message", stdout.getvalue())
+            self.assertIn("startup test message", (root / "generation.log").read_text(encoding="utf-8"))
+
+    def test_startup_report_is_actionable_without_logging_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stdout = io.StringIO()
+            with patch.object(moment_in_history, "ROOT", root), \
+                    patch.object(moment_in_history, "LOG_PATH", root / "generation.log"), \
+                    patch.object(moment_in_history, "OPENAI_API_KEY", "secret-api-key"), \
+                    patch.object(moment_in_history, "EMAIL_RECIPIENTS", "one@example.com, two@example.com"), \
+                    patch.object(moment_in_history, "EMAIL_SMTP_HOST", "smtp.example.com"), \
+                    contextlib.redirect_stdout(stdout):
+                moment_in_history.startup_report("test")
+
+            report = stdout.getvalue()
+            self.assertIn("Moment in history App 1.5.0 starting", report)
+            self.assertIn("Runtime ready:", report)
+            self.assertIn("Text service configured:", report)
+            self.assertIn("Image service configured:", report)
+            self.assertIn("Email delivery: enabled (2 recipient(s)", report)
+            self.assertIn("openai_key=present", report)
+            self.assertNotIn("secret-api-key", report)
+            self.assertIn("Startup complete: daemon is ready", report)
+
     def test_restart_generation_is_disabled_by_default_but_schedule_remains_active(self):
         with patch.object(moment_in_history, "GENERATE_ON_RESTART", False):
             self.assertFalse(

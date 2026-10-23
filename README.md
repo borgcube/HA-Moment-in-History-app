@@ -108,6 +108,10 @@ Set `email_recipients` to a comma-separated list to send each newly generated im
 
 `generate_on_restart` defaults to `false`. An App update or restart keeps the Supervisor configuration and the generated files under `/config/www/moment-in-history/`; it does not request a new image. The normal daily schedule remains active. Set `generate_on_restart: true` only when you intentionally want the App to generate immediately when its daemon starts. The older `run_on_startup` option remains in the schema for compatibility with existing installations, but it no longer controls generation.
 
+### Startup and runtime logging
+
+The App writes `generation.log` under `/config/www/moment-in-history/` and also mirrors operational messages to standard output so they appear in the Home Assistant App log. On startup it reports the App version, timezone, polling interval, schedule, restart behavior, configured text and image endpoints, whether an OpenAI key is present, email status, and output paths. Credentials and API keys are never written to either log. It then reports whether today's image is already present, whether it is waiting for the daily schedule, or whether generation is starting.
+
 Never commit an API key to this repository, a dashboard YAML file, or a public issue.
 
 ## Home Assistant setup
