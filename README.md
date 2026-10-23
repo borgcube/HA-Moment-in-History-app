@@ -58,7 +58,7 @@ The App includes a Home Assistant **Ingress** configuration page. Open the App's
 - the fallback Ollama endpoint's `/api/tags` response; and
 - OpenAI's `/v1/models` endpoint, filtered to image-capable model IDs, when an OpenAI API key is configured.
 
-Enter or edit the primary and fallback Ollama API URLs in this page. Choose the primary text model, fallback text model, OpenAI image model, image provider, image quality, local image backend, schedule, and one or more notification entities from the organized sections, then select **Save configuration**. The App saves these Web UI settings through Home Assistant Supervisor and restarts so the new choices become active. The OpenAI key is stored by Home Assistant and is never returned to the browser or written to the model-discovery response.
+Enter or edit the primary and fallback Ollama API URLs in this page. Choose the primary text model, fallback text model, OpenAI image model, image provider, image quality, local image backend, schedule, and one or more notification entities from the organized sections, then select **Save configuration**. The App saves these Web UI settings through Home Assistant Supervisor, keeps a persistent copy in its `/data` directory so they survive future schema changes, and restarts so the new choices become active. The OpenAI key is stored by Home Assistant and is never returned to the browser or written to the model-discovery response.
 
 ### Automatic updates from GitHub
 
@@ -78,7 +78,7 @@ The app's **Configuration** tab is intentionally small. It contains only setting
 | Run on startup | Allows the normal daily check when the app starts. |
 | Generate on restart | Generates immediately at startup, before the daily schedule. It is disabled by default to avoid unexpected image costs. |
 
-Provider URLs, models, the OpenAI key, image quality, schedule time, email, and ComfyUI settings are configured in **Info → Open Web UI**. Existing installations keep their saved values and can edit them there without regenerating the current image.
+Provider URLs, models, the OpenAI key, image quality, schedule time, email, and ComfyUI settings are configured in **Info → Open Web UI**. Existing installations keep their saved values and can edit them there without regenerating the current image. On the first 1.9.0 start, any existing Web UI values are copied into the App's persistent data before the reduced App schema is applied.
 
 ### Image providers
 

@@ -58,6 +58,28 @@ class EventPageRefreshTest(unittest.TestCase):
             self.assertIn("Image archive: enabled", report)
             self.assertIn("Startup complete: daemon is ready", report)
 
+    def test_web_settings_migrate_to_persistent_app_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "web-settings.json"
+            with patch.object(moment_in_history, "WEB_SETTINGS_PATH", settings_path), \
+                    patch.object(moment_in_history, "PERSISTED_WEB_OPTIONS", {}), \
+                    patch.object(
+                        moment_in_history,
+                        "SUPERVISOR_OPTIONS",
+                        {
+                            "primary_ollama_url": "http://ollama01.example:11434",
+                            "openai_api_key": "secret-key",
+                            "openai_image_model": "gpt-image-2",
+                        },
+                    ), \
+                    patch.object(moment_in_history, "ADDON_OPTIONS", {"image_size": "1024x1024"}):
+                moment_in_history.migrate_web_options()
+                saved = json.loads(settings_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(saved["primary_ollama_url"], "http://ollama01.example:11434")
+            self.assertEqual(saved["openai_api_key"], "secret-key")
+            self.assertEqual(saved["openai_image_model"], "gpt-image-2")
+
     def test_daemon_handles_stop_as_clean_shutdown(self):
         class FakeServer:
             def __init__(self):
@@ -629,13 +651,15 @@ class ModelSelectionTest(unittest.TestCase):
         response = MagicMock()
         response.__enter__.return_value = response
         response.read.return_value = b"{}"
-        with patch.object(
-            moment_in_history,
-            "_load_addon_options",
-            return_value={"openai_api_key": "secret-key", "other_option": True, "text_model": "old-model"},
-        ), patch.object(moment_in_history, "SUPERVISOR_TOKEN", "supervisor-token"), \
-                patch.object(moment_in_history, "urlopen", return_value=response) as urlopen_mock:
-            moment_in_history.save_model_options({"text_model": "new-model"})
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(
+                moment_in_history,
+                "_load_addon_options",
+                return_value={"openai_api_key": "secret-key", "other_option": True, "text_model": "old-model"},
+            ), patch.object(moment_in_history, "SUPERVISOR_TOKEN", "supervisor-token"), \
+                    patch.object(moment_in_history, "WEB_SETTINGS_PATH", Path(directory) / "web-settings.json"), \
+                    patch.object(moment_in_history, "urlopen", return_value=response) as urlopen_mock:
+                moment_in_history.save_model_options({"text_model": "new-model"})
 
         request = urlopen_mock.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))

@@ -60,13 +60,83 @@ def _load_addon_options() -> dict[str, Any]:
 
 
 ADDON_OPTIONS = _load_addon_options()
+WEB_SETTINGS_PATH = Path(
+    os.environ.get("MOMENT_WEB_SETTINGS_FILE", "/data/moment-in-history-web-settings.json")
+)
+
+
+def _load_supervisor_options() -> dict[str, Any]:
+    """Read the Supervisor option set when the local options file is filtered."""
+    if not SUPERVISOR_TOKEN:
+        return {}
+    request = Request(
+        "http://supervisor/addons/self/options",
+        headers={
+            "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+            "Accept": "application/json",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.0",
+        },
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 - local options remain a safe fallback
+        return {}
+    candidates = [payload]
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        candidates.append(payload["data"])
+    for candidate in candidates:
+        if isinstance(candidate, dict) and isinstance(candidate.get("options"), dict):
+            return dict(candidate["options"])
+    return {}
+
+
+def _load_persisted_web_options() -> dict[str, Any]:
+    """Load Web UI settings kept in the App's persistent data directory."""
+    try:
+        payload = json.loads(WEB_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        field: payload[field]
+        for field in config_ui.WEB_SETTINGS_FIELDS
+        if field in payload
+    }
+
+
+SUPERVISOR_OPTIONS = _load_supervisor_options()
+PERSISTED_WEB_OPTIONS = _load_persisted_web_options()
 
 
 def _runtime_options() -> dict[str, Any]:
     """Return Web UI settings merged with defaults and Supervisor options."""
     options = dict(config_ui.DEFAULT_WEB_OPTIONS)
     options.update(ADDON_OPTIONS)
+    options.update(SUPERVISOR_OPTIONS)
+    options.update(PERSISTED_WEB_OPTIONS)
     return options
+
+
+def migrate_web_options() -> None:
+    """Preserve Web UI settings before Supervisor filters removed schema fields."""
+    if PERSISTED_WEB_OPTIONS:
+        return
+    source = {
+        field: source_options[field]
+        for field in config_ui.WEB_SETTINGS_FIELDS
+        for source_options in (SUPERVISOR_OPTIONS, ADDON_OPTIONS)
+        if field in source_options
+    }
+    if not source:
+        return
+    try:
+        WEB_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        WEB_SETTINGS_PATH.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+        PERSISTED_WEB_OPTIONS.update(source)
+    except OSError as exc:
+        print(f"Web UI settings migration deferred: {exc}", file=sys.stderr, flush=True)
 
 
 def _setting(env_name: str, option_name: str, default: str) -> str:
@@ -755,7 +825,7 @@ def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.8",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.0",
         },
         method="POST",
     )
@@ -769,10 +839,13 @@ def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
 
 
 def save_model_options(changes: dict[str, str]) -> None:
-    """Persist model selections through Supervisor so they survive restarts."""
+    """Persist Web UI selections through Supervisor and an App-owned backup."""
     if not SUPERVISOR_TOKEN:
         raise RuntimeError("SUPERVISOR_TOKEN is unavailable")
-    options = _load_addon_options() or dict(ADDON_OPTIONS)
+    options = dict(config_ui.DEFAULT_WEB_OPTIONS)
+    options.update(_load_addon_options())
+    options.update(SUPERVISOR_OPTIONS)
+    options.update(PERSISTED_WEB_OPTIONS)
     for field in config_ui.SELECTABLE_FIELDS:
         if field in changes:
             options[field] = changes[field]
@@ -782,7 +855,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.8",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.0",
         },
         method="POST",
     )
@@ -791,6 +864,29 @@ def save_model_options(changes: dict[str, str]) -> None:
             response.read()
     except HTTPError as exc:
         raise RuntimeError(f"Supervisor options update failed ({exc.code})") from exc
+    try:
+        WEB_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        WEB_SETTINGS_PATH.write_text(
+            json.dumps(
+                {
+                    field: options[field]
+                    for field in config_ui.WEB_SETTINGS_FIELDS
+                    if field in options
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        PERSISTED_WEB_OPTIONS.update(
+            {
+                field: options[field]
+                for field in config_ui.WEB_SETTINGS_FIELDS
+                if field in options
+            }
+        )
+    except OSError as exc:
+        print(f"Web UI settings backup unavailable: {exc}", file=sys.stderr, flush=True)
 
 
 def get_home_assistant_notify_entities() -> list[str]:
@@ -1001,6 +1097,7 @@ def main() -> int:
     parser.add_argument("--daemon", action="store_true", help="Run continuously and generate once per day")
     args = parser.parse_args()
     ROOT.mkdir(parents=True, exist_ok=True)
+    migrate_web_options()
     startup_report("daemon" if args.daemon else "one-shot")
     if args.daemon:
         return daemon()
