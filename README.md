@@ -78,7 +78,7 @@ The app's **Configuration** tab is intentionally small. It contains only setting
 | Run on startup | Allows the normal daily check when the app starts. |
 | Generate on restart | Generates immediately at startup, before the daily schedule. It is disabled by default to avoid unexpected image costs. |
 
-Provider URLs, models, the OpenAI key, image quality, schedule time, email, and ComfyUI settings are configured in **Info → Open Web UI**. Existing installations keep their saved values and can edit them there without regenerating the current image. On the first 1.9.0 start, any existing Web UI values are copied into the App's persistent data before the reduced App schema is applied.
+Provider URLs, models, the OpenAI key, image quality, schedule time, email, and ComfyUI settings are configured in **Info → Open Web UI**. Existing installations keep their saved values and can edit them there without regenerating the current image. On the first 1.9.x start, any existing Web UI values are copied into the App's persistent data before the reduced App schema is applied.
 
 ### Image providers
 
