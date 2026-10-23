@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.12 starting", report)
+            self.assertIn("Moment in history App 1.9.13 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -720,7 +720,7 @@ class ModelSelectionTest(unittest.TestCase):
             side_effect=[
                 [entry],
                 {"flow_id": "flow-update"},
-                {"type": "create_entry"},
+                {"type": "reconfigure_successful"},
                 [entry],
             ],
         ) as request_json:

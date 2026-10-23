@@ -72,7 +72,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.12",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.13",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -820,7 +820,7 @@ def update_smtp(api_url: str, token: str, settings: dict[str, Any]) -> dict[str,
         method="POST",
         payload=_smtp_connection_input(settings, include_options=False),
     )
-    if not isinstance(result, dict) or result.get("type") != "create_entry":
+    if not isinstance(result, dict) or result.get("type") not in {"create_entry", "reconfigure_successful"}:
         raise RuntimeError(_config_flow_error(result, "Home Assistant rejected the SMTP update"))
     return smtp_config_details(api_url, token)
 
