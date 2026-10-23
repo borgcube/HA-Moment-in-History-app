@@ -8,6 +8,7 @@ import threading
 import unittest
 from datetime import date
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import MagicMock, patch
 
@@ -45,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.8.8 starting", report)
+            self.assertIn("Moment in history App 1.8.9 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -330,6 +331,40 @@ class ComfyUIImageProviderTest(unittest.TestCase):
 
 
 class ModelSelectionTest(unittest.TestCase):
+    def test_smtp_http_errors_are_returned_as_safe_actionable_messages(self):
+        def fail_configure(_configuration):
+            raise HTTPError(
+                "http://supervisor/core/api/config/config_entries/flow",
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(b'{"message":"invalid_auth","password":"do-not-show"}'),
+            )
+
+        server = config_ui.start_server(
+            port=0,
+            get_options=lambda: {"primary_ollama_url": "", "fallback_ollama_url": ""},
+            save_options=lambda changes: None,
+            log=lambda message: None,
+            configure_smtp=fail_configure,
+        )
+        port = server.server_address[1]
+        try:
+            request = Request(
+                f"http://127.0.0.1:{port}/api/smtp",
+                data=json.dumps({"sender": "sender@example.com"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(request)
+            response = json.loads(raised.exception.read().decode("utf-8"))
+            self.assertEqual(response["error"], "HTTP 400: invalid_auth")
+            self.assertNotIn("password", response["error"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_ollama_models_are_sorted_and_deduplicated(self):
         with patch.object(
             config_ui,

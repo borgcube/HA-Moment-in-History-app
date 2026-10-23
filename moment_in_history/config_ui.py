@@ -39,7 +39,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.8.8",
+            "User-Agent": "BORGcube-MomentInHistory/1.8.9",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -51,9 +51,40 @@ def _request_json(
 
 
 def _safe_error(exc: Exception) -> str:
-    """Return a short error that cannot expose credentials or response bodies."""
+    """Return a useful error without exposing credentials or response bodies."""
     if isinstance(exc, HTTPError):
-        return f"HTTP {exc.code}"
+        detail = ""
+        try:
+            body = exc.read(4096).decode("utf-8", errors="replace").strip()
+            if body:
+                try:
+                    payload = json.loads(body)
+                except json.JSONDecodeError:
+                    payload = body
+                candidates: list[str] = []
+                if isinstance(payload, dict):
+                    for key in ("message", "error", "reason"):
+                        value = payload.get(key)
+                        if value:
+                            candidates.append(str(value))
+                    errors = payload.get("errors")
+                    if isinstance(errors, dict):
+                        candidates.extend(str(value) for value in errors.values() if value)
+                elif isinstance(payload, str):
+                    candidates.append(payload)
+                for candidate in candidates:
+                    cleaned = re.sub(r"\s+", " ", candidate).strip()
+                    cleaned = re.sub(
+                        r"(?i)(password|token|authorization|api[_ -]?key)\s*[:=]\s*\S+",
+                        r"\1=[redacted]",
+                        cleaned,
+                    )
+                    if cleaned and len(cleaned) <= 240:
+                        detail = cleaned
+                        break
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            pass
+        return f"HTTP {exc.code}: {detail}" if detail else f"HTTP {exc.code}"
     if isinstance(exc, (URLError, TimeoutError)):
         return "network or timeout error"
     return "invalid response"
@@ -1146,8 +1177,12 @@ def start_server(
                 self._json(400, {"error": str(exc)})
                 return
             except Exception as exc:  # noqa: BLE001 - do not expose Supervisor details
-                log(f"Configuration UI save failed: {_safe_error(exc)}")
-                self._json(502, {"error": "Home Assistant rejected the configuration update"})
+                safe_error = _safe_error(exc)
+                log(f"Configuration UI save failed: {safe_error}")
+                if path in {"/api/smtp", "/api/email-recipient"}:
+                    self._json(502, {"error": safe_error})
+                else:
+                    self._json(502, {"error": "Home Assistant rejected the configuration update"})
                 return
             self._json(200, {"saved": sorted(changes), "restart_required": True})
 

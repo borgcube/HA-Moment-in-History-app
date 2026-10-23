@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.8.8"
+APP_VERSION = "1.8.9"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
