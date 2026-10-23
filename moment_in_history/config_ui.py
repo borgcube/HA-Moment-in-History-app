@@ -72,7 +72,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.13",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.14",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -604,6 +604,15 @@ def _config_flow_error(result: Any, fallback: str) -> str:
     return str(reason) if reason else fallback
 
 
+def _smtp_reconfigure_succeeded(result: Any) -> bool:
+    """Recognize Home Assistant's successful SMTP reconfigure responses."""
+    if not isinstance(result, dict):
+        return False
+    if result.get("type") in {"create_entry", "reconfigure_successful"}:
+        return True
+    return result.get("type") == "abort" and result.get("reason") == "reconfigure_successful"
+
+
 def _wait_for_smtp_recipient(api_url: str, token: str, email: str) -> dict[str, Any]:
     """Wait for Home Assistant to expose the notify entity after a flow creates it."""
     deadline = time.monotonic() + 10
@@ -820,7 +829,7 @@ def update_smtp(api_url: str, token: str, settings: dict[str, Any]) -> dict[str,
         method="POST",
         payload=_smtp_connection_input(settings, include_options=False),
     )
-    if not isinstance(result, dict) or result.get("type") not in {"create_entry", "reconfigure_successful"}:
+    if not _smtp_reconfigure_succeeded(result):
         raise RuntimeError(_config_flow_error(result, "Home Assistant rejected the SMTP update"))
     return smtp_config_details(api_url, token)
 
