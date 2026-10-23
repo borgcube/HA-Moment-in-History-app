@@ -34,7 +34,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 POLL_INTERVAL_SECONDS = 30
 HOME_ASSISTANT_API_URL = os.environ.get(
     "HOME_ASSISTANT_API_URL", "http://supervisor/core/api"
