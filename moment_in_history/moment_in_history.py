@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.4"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.3",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.4",
         },
     )
     try:
@@ -541,9 +541,9 @@ def comfyui_workflow(prompt: str, *, seed: int) -> dict[str, Any]:
     }
 
 
-def generate_comfyui_image(prompt: str) -> bytes:
+def generate_comfyui_image(prompt: str, endpoint: str | None = None) -> bytes:
     """Queue a native ComfyUI workflow and return its saved PNG."""
-    endpoint = IMAGE_BACKEND_URL.rstrip("/")
+    endpoint = (endpoint or IMAGE_BACKEND_URL).rstrip("/")
     queue_payload = {
         "prompt": comfyui_workflow(prompt, seed=secrets.randbelow(2**63)),
         "client_id": uuid.uuid4().hex,
@@ -646,8 +646,18 @@ def run_image_model(prompt: str, destination: Path) -> str:
             log(f"OpenAI image backend unavailable: {exc}; trying LAN fallback")
 
     if IMAGE_PROVIDER == "comfyui":
-        destination.write_bytes(generate_comfyui_image(prompt))
-        return f"ComfyUI {COMFYUI_MODEL} ({endpoint_host(IMAGE_BACKEND_URL)})"
+        endpoints = [IMAGE_BACKEND_URL]
+        if IMAGE_BACKEND_FALLBACK_URL and IMAGE_BACKEND_FALLBACK_URL not in endpoints:
+            endpoints.append(IMAGE_BACKEND_FALLBACK_URL)
+        last_error: Exception | None = None
+        for endpoint in endpoints:
+            try:
+                destination.write_bytes(generate_comfyui_image(prompt, endpoint))
+                return f"ComfyUI {COMFYUI_MODEL} ({endpoint_host(endpoint)})"
+            except Exception as exc:  # noqa: BLE001 - try the configured fallback
+                last_error = exc
+                log(f"ComfyUI backend unavailable ({endpoint}): {exc}")
+        raise RuntimeError(f"All ComfyUI backends failed: {last_error}")
 
     payload = {
         "prompt": prompt,
@@ -830,7 +840,7 @@ def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.3",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.4",
         },
         method="POST",
     )
@@ -860,7 +870,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.3",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.4",
         },
         method="POST",
     )

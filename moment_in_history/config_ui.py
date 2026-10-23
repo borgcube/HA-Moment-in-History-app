@@ -41,7 +41,7 @@ DEFAULT_WEB_OPTIONS = {
     "fallback_ollama_url": "http://ollama02.borgcube.com:11434",
     "text_model": "qwen3.8:27b-mlx",
     "fallback_text_model": "gemma4:e4b",
-    "image_backend_url": "http://ollama02.borgcube.com:8188",
+    "image_backend_url": "https://openclaw.borgcube.com/comfyui",
     "image_backend_fallback_url": "",
     "image_provider": "openai",
     "openai_api_key": "",
@@ -71,7 +71,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.3",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.4",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -193,6 +193,46 @@ def openai_image_models(api_key: str) -> list[str]:
     )
 
 
+def image_backend_models(base_url: str) -> list[str]:
+    """Discover ComfyUI checkpoints exposed by a local image backend."""
+    if not base_url.strip():
+        return []
+    last_error: Exception | None = None
+    for path in ("/models/checkpoints", "/object_info/CheckpointLoaderSimple"):
+        try:
+            payload = _request_json(f"{base_url.rstrip('/')}{path}")
+            names: set[str] = set()
+            if isinstance(payload, list):
+                names.update(str(value).strip() for value in payload if str(value).strip())
+            elif isinstance(payload, dict):
+                values = payload.get("models") or payload.get("checkpoints") or payload.get("data")
+                if isinstance(values, list):
+                    for value in values:
+                        if isinstance(value, str) and value.strip():
+                            names.add(value.strip())
+                        elif isinstance(value, dict):
+                            for key in ("id", "name", "filename"):
+                                candidate = str(value.get(key, "")).strip()
+                                if candidate:
+                                    names.add(candidate)
+                nodes = payload.values()
+                for node in nodes:
+                    if not isinstance(node, dict):
+                        continue
+                    required = (node.get("input") or {}).get("required", {})
+                    checkpoint = required.get("ckpt_name") if isinstance(required, dict) else None
+                    choices = checkpoint[0] if isinstance(checkpoint, list) and checkpoint else checkpoint
+                    if isinstance(choices, list):
+                        names.update(str(value).strip() for value in choices if str(value).strip())
+            if names:
+                return sorted(names, key=str.casefold)
+        except Exception as exc:  # noqa: BLE001 - discovery is best effort
+            last_error = exc
+    if last_error:
+        raise last_error
+    return []
+
+
 def _is_image_model(model_id: str) -> bool:
     normalized = model_id.casefold()
     return (
@@ -231,6 +271,7 @@ def discover_models(options: dict[str, Any]) -> dict[str, Any]:
             "primary_ollama": [],
             "fallback_ollama": [],
             "openai_image": [],
+            "image_backend": [],
         },
         "errors": {},
     }
@@ -254,6 +295,22 @@ def discover_models(options: dict[str, Any]) -> dict[str, Any]:
             result["errors"]["openai_image"] = _safe_error(exc)
     else:
         result["errors"]["openai_image"] = "enter an OpenAI API key in App Configuration first"
+
+    image_urls = (
+        ("image_backend", str(options.get("image_backend_url", "")).strip()),
+        ("image_backend_fallback", str(options.get("image_backend_fallback_url", "")).strip()),
+    )
+    for key, url in image_urls:
+        if not url:
+            continue
+        try:
+            discovered = image_backend_models(url)
+            result["models"]["image_backend"] = sorted(
+                set(result["models"]["image_backend"]) | set(discovered),
+                key=str.casefold,
+            )
+        except Exception as exc:  # noqa: BLE001 - show a safe UI diagnostic
+            result["errors"][key] = _safe_error(exc)
 
     return result
 
@@ -755,15 +812,16 @@ def _page() -> str:
       </div>
       <div>
         <label for="image-backend-url">Local image API / ComfyUI URL</label>
-        <input id="image-backend-url" type="url" inputmode="url" placeholder="http://ollama02.example.local:8188">
+        <input id="image-backend-url" type="url" inputmode="url" placeholder="https://openclaw.borgcube.com/comfyui">
       </div>
       <div>
-        <label for="image-backend-fallback-url">Fallback image API URL</label>
+        <label for="image-backend-fallback-url">Fallback image API / ComfyUI URL</label>
         <input id="image-backend-fallback-url" type="url" inputmode="url" placeholder="Optional">
       </div>
       <div class="full">
         <label for="comfyui-model">ComfyUI checkpoint filename</label>
-        <input id="comfyui-model" type="text" placeholder="sd_xl_turbo_1.0.safetensors">
+        <input id="comfyui-model" list="comfyui-model-options" type="text" placeholder="sd_xl_turbo_1.0.safetensors">
+        <datalist id="comfyui-model-options"></datalist>
         <p class="hint">Image size is selected in the App Configuration page. Image steps are also there and apply only to local diffusion backends; OpenAI ignores them.</p>
       </div>
     </div>
@@ -845,6 +903,7 @@ def _page() -> str:
   const smtpDialog = document.getElementById('smtp-dialog');
   const smtpForm = document.getElementById('smtp-form');
   const smtpStatus = document.getElementById('smtp-status');
+  const dirtyFields = new Set();
   let emailEnableRequested = false;
   function apiPath(path) {
     let base = window.location.pathname;
@@ -853,7 +912,9 @@ def _page() -> str:
   }
   function fill(field, current, models, disabled) {
     const select = document.getElementById(field.id);
-    const currentValues = field.multiple ? (current || '').split(',').map(function (value) { return value.trim(); }).filter(Boolean) : [current];
+    const currentValues = dirtyFields.has(field.id)
+      ? Array.from(select.selectedOptions).map(function (option) { return option.value; }).filter(Boolean)
+      : (field.multiple ? (current || '').split(',').map(function (value) { return value.trim(); }).filter(Boolean) : [current]);
     select.replaceChildren();
     currentValues.forEach(function (value) {
       if (!models.includes(value)) select.add(new Option(value + ' (' + field.label + '; not currently advertised)', value));
@@ -866,7 +927,13 @@ def _page() -> str:
     select.disabled = disabled;
   }
   function setValue(id, value) {
+    if (dirtyFields.has(id)) return;
     document.getElementById(id).value = value || '';
+  }
+  function setDatalist(id, values) {
+    const datalist = document.getElementById(id);
+    datalist.replaceChildren();
+    values.forEach(function (value) { datalist.appendChild(new Option(value, value)); });
   }
   function render(data) {
     const config = data.config || {};
@@ -882,13 +949,16 @@ def _page() -> str:
     setValue('image-backend-url', config.image_backend_url);
     setValue('image-backend-fallback-url', config.image_backend_fallback_url);
     setValue('comfyui-model', config.comfyui_model);
+    const imageBackendModels = models.image_backend || [];
+    setDatalist('comfyui-model-options', imageBackendModels);
+    if (!config.comfyui_model && imageBackendModels.length) setValue('comfyui-model', imageBackendModels[0]);
     setValue('schedule-time', config.schedule_time || '00:05');
     setValue('email-camera-entity', config.email_camera_entity || 'camera.moment_in_history');
     const emailSelect = document.getElementById('email-entity');
     const email = data.email || {};
     fill({ id: 'email-entity', multiple: true, allowEmpty: true, label: 'Saved value' }, config.email_notify_entity, email.notify_entities || [], false);
     emailSelect.setAttribute('aria-label', 'Existing Home Assistant notify entities');
-    if (!emailEnableRequested) emailEnabled.checked = Boolean(config.email_notify_entity);
+    if (!emailEnableRequested && !dirtyFields.has('email-enabled')) emailEnabled.checked = Boolean(config.email_notify_entity);
     const managed = email.managed_recipients || [];
     const pills = document.getElementById('managed-recipients');
     pills.replaceChildren();
@@ -1061,6 +1131,16 @@ def _page() -> str:
   }
   document.getElementById('refresh').addEventListener('click', refresh);
   document.getElementById('save').addEventListener('click', save);
+  ['primary-url-input', 'fallback-url-input', 'image-provider', 'openai-quality', 'openai-key',
+    'clear-openai-key', 'openai-model', 'image-model', 'image-backend-url',
+    'image-backend-fallback-url', 'comfyui-model', 'schedule-time', 'email-enabled',
+    'email-entity', 'email-camera-entity'].forEach(function (id) {
+      const element = document.getElementById(id);
+      if (!element) return;
+      ['input', 'change'].forEach(function (eventName) {
+        element.addEventListener(eventName, function () { dirtyFields.add(id); });
+      });
+    });
   ['primary-url-input', 'fallback-url-input'].forEach(function (id) {
     let timer = null;
     document.getElementById(id).addEventListener('input', function () {

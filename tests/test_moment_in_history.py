@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.3 starting", report)
+            self.assertIn("Moment in history App 1.9.4 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -304,6 +304,30 @@ class ComfyUIImageProviderTest(unittest.TestCase):
             self.assertEqual(destination.read_bytes(), b"png-bytes")
         self.assertIn("ComfyUI", description)
 
+    def test_comfyui_provider_uses_fallback_endpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "image.png"
+            with patch.object(moment_in_history, "IMAGE_PROVIDER", "comfyui"), \
+                    patch.object(moment_in_history, "IMAGE_BACKEND_URL", "https://primary.example/comfyui"), \
+                    patch.object(moment_in_history, "IMAGE_BACKEND_FALLBACK_URL", "https://fallback.example/comfyui"), \
+                    patch.object(moment_in_history, "log"), \
+                    patch.object(
+                        moment_in_history,
+                        "generate_comfyui_image",
+                        side_effect=[RuntimeError("primary unavailable"), b"fallback-png"],
+                    ) as generate:
+                description = moment_in_history.run_image_model("prompt", destination)
+
+            self.assertEqual(destination.read_bytes(), b"fallback-png")
+            self.assertEqual(
+                [call.args for call in generate.call_args_list],
+                [
+                    ("prompt", "https://primary.example/comfyui"),
+                    ("prompt", "https://fallback.example/comfyui"),
+                ],
+            )
+        self.assertIn("fallback.example", description)
+
     def test_comfyui_provider_is_in_the_app_schema(self):
         schema = (Path(__file__).resolve().parents[1] / "moment_in_history" / "config.yaml").read_text(
             encoding="utf-8"
@@ -427,6 +451,29 @@ class ModelSelectionTest(unittest.TestCase):
         ) as request_json:
             self.assertEqual(config_ui.openai_image_models("secret-key"), ["dall-e-3", "gpt-image-2"])
             self.assertEqual(request_json.call_args.kwargs["headers"]["Authorization"], "Bearer secret-key")
+
+    def test_comfyui_checkpoints_are_discovered(self):
+        with patch.object(
+            config_ui,
+            "_request_json",
+            return_value=["sd_xl_turbo_1.0.safetensors", "custom.safetensors"],
+        ):
+            self.assertEqual(
+                config_ui.image_backend_models("https://openclaw.example/comfyui"),
+                ["custom.safetensors", "sd_xl_turbo_1.0.safetensors"],
+            )
+
+    def test_model_discovery_includes_detected_image_checkpoints(self):
+        with patch.object(config_ui, "ollama_models", return_value=[]), \
+                patch.object(config_ui, "image_backend_models", return_value=["detected.safetensors"]):
+            result = config_ui.discover_models(
+                {
+                    "primary_ollama_url": "",
+                    "fallback_ollama_url": "",
+                    "image_backend_url": "https://openclaw.example/comfyui",
+                }
+            )
+        self.assertEqual(result["models"]["image_backend"], ["detected.safetensors"])
 
     def test_model_discovery_does_not_return_openai_key(self):
         with patch.object(config_ui, "ollama_models", side_effect=[["primary-model"], ["fallback-model"]]), \
@@ -701,6 +748,9 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="schedule-time"', page)
             self.assertIn('id="email-camera-entity"', page)
             self.assertIn('id="save" type="button">Save configuration', page)
+            self.assertIn("Fallback image API / ComfyUI URL", page)
+            self.assertIn('id="comfyui-model-options"', page)
+            self.assertIn("dirtyFields", page)
             self.assertIn("/api/tags", page)
             self.assertIn('id="openai-model"', page)
             self.assertIn("document.addEventListener('visibilitychange'", page)
