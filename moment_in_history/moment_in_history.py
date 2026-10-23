@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.22"
+APP_VERSION = "1.9.23"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.22",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.23",
         },
     )
     try:
@@ -813,7 +813,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.21",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.23",
         },
         method="POST",
     )
@@ -823,6 +823,55 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:500]
         raise RuntimeError(f"Home Assistant SMTP action failed ({exc.code}): {detail}") from exc
+
+
+def event_email_html(metadata: dict[str, Any]) -> str:
+    """Build a broadly compatible HTML email with a disclosure-style details block."""
+    date_label = html.escape(str(metadata.get("date_label", "")), quote=True)
+    event = html.escape(str(metadata.get("event", "")), quote=True)
+    pre_moment = html.escape(str(metadata.get("pre_moment", "")), quote=True)
+    description = html.escape(str(metadata.get("description", "")).strip(), quote=True)
+    source = html.escape(str(metadata.get("source", "")), quote=True)
+    source_url = html.escape(str(metadata.get("source_url", "")), quote=True)
+    description_block = (
+        f'<p style="margin:16px 0 0"><strong>Context</strong><br>{description}</p>'
+        if description
+        else ""
+    )
+    return f"""<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#f4f1eb;color:#1c1c1c;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;line-height:1.5">
+    <div style="max-width:760px;margin:0 auto;padding:24px 16px">
+      <div style="color:#72551d;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase">{date_label}</div>
+      <h1 style="font-size:24px;line-height:1.2;margin:6px 0 18px">Moment in history</h1>
+      <img src="cid:moment_in_history_image" alt="Moment in history illustration" style="display:block;width:100%;height:auto;border:0;margin:0 0 20px">
+      <details style="background:#fff;border:1px solid #d8d1c5;border-radius:8px;padding:12px 16px">
+        <summary style="cursor:pointer;font-weight:700">Show event details</summary>
+        <div style="padding-top:14px">
+          <p style="margin:0"><strong>Event</strong><br>{event}</p>
+          <p style="margin:16px 0 0"><strong>Ten seconds before</strong><br>{pre_moment}</p>
+          {description_block}
+          <p style="margin:16px 0 0"><a href="{source_url}" style="color:#315f9c">Source: {source}</a></p>
+        </div>
+      </details>
+      <p style="color:#666;font-size:12px;margin:14px 0 0">If your email app does not support expandable sections, the complete details are included in the plain-text version of this message.</p>
+    </div>
+  </body>
+</html>
+"""
+
+
+def generic_test_email_html() -> str:
+    """Build the HTML fallback used before the first daily generation."""
+    return """<!doctype html>
+<html lang="en">
+  <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;line-height:1.5;color:#1c1c1c">
+    <h1>Moment in history — SMTP test</h1>
+    <p>This is a test email from Moment in history.</p>
+    <p>The app does not currently have a complete generated image and event available, so this generic message was sent instead.</p>
+  </body>
+</html>
+"""
 
 
 def send_event_email(
@@ -847,6 +896,7 @@ def send_event_email(
                 f"Ten seconds before:\n{metadata['pre_moment']}\n\n"
                 f"Source: {metadata['source']}\n{metadata['source_url']}\n"
             ),
+            "html": event_email_html(metadata),
             "attachments": [
                 {
                     "media_source": {
@@ -854,6 +904,7 @@ def send_event_email(
                         "media_content_type": "image/png",
                     },
                     "filename": "moment-in-history.png",
+                    "content_id": "moment_in_history_image",
                 }
             ],
         }
@@ -896,6 +947,7 @@ def send_test_email(notify_entities: list[str] | None = None) -> dict[str, str]:
                 "The app does not currently have a complete generated image and event available, "
                 "so this generic message was sent instead."
             ),
+            "html": generic_test_email_html(),
         }
     )
     log(f"SMTP server accepted generic test email via Home Assistant ({', '.join(notify_entities)})")
@@ -919,7 +971,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.22",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.23",
         },
         method="POST",
     )

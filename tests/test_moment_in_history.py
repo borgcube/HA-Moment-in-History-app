@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.22 starting", report)
+            self.assertIn("Moment in history App 1.9.23 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -190,10 +190,13 @@ class EventPageRefreshTest(unittest.TestCase):
             payload = json.loads(request.data.decode("utf-8"))
             self.assertEqual(payload["entity_id"], "notify.moment_in_history")
             self.assertIn("The room holds its breath.", payload["message"])
+            self.assertIn("Show event details", payload["html"])
+            self.assertIn("cid:moment_in_history_image", payload["html"])
             self.assertEqual(
                 payload["attachments"][0]["media_source"]["media_content_id"],
                 "media-source://camera/camera.moment_in_history",
             )
+            self.assertEqual(payload["attachments"][0]["content_id"], "moment_in_history_image")
             self.assertEqual(request.get_header("Authorization"), "Bearer secret-supervisor-token")
 
     def test_event_email_supports_multiple_smtp_notify_entities(self):
@@ -264,6 +267,7 @@ class EventPageRefreshTest(unittest.TestCase):
         self.assertEqual(result, {"mode": "generic"})
         self.assertEqual(payload["title"], "Moment in history — SMTP test")
         self.assertNotIn("attachments", payload)
+        self.assertIn("SMTP test", payload["html"])
 
     def test_test_email_can_use_unsaved_notify_targets(self):
         response = MagicMock()
