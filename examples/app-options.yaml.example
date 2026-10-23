@@ -1,7 +1,7 @@
 # These values belong in the Moment in history App Configuration tab.
 # This is an example only; do not put API keys in this file.
-primary_ollama_url: http://openclaw.example.local:11434
-fallback_ollama_url: http://storage01.example.local:11434
+primary_ollama_url: http://ollama01.example.local:11434
+fallback_ollama_url: http://ollama02.example.local:11434
 text_model: qwen3.8:27b-mlx
 fallback_text_model: gemma4:e4b
 image_provider: openai
@@ -9,11 +9,19 @@ openai_api_key: "enter in the App Configuration tab"
 openai_image_model: gpt-image-2
 openai_image_quality: high
 openai_image_size: 1024x1024
-image_backend_url: http://storage01.example.local:8188
+image_backend_url: http://ollama02.example.local:8188
 image_backend_fallback_url: ""
 image_model: Tongyi-MAI/Z-Image-Turbo
 image_width: 1024
 image_height: 1024
 image_steps: 9
+email_recipients: "you@example.com, second@example.com"
+email_smtp_host: smtp.example.com
+email_smtp_port: 587
+email_smtp_username: "you@example.com"
+email_smtp_password: "enter in the App Configuration tab"
+email_from: "you@example.com"
+email_smtp_use_tls: true
+email_smtp_use_ssl: false
 schedule_time: "00:05"
 run_on_startup: true

@@ -17,10 +17,11 @@ import html
 import json
 import os
 import re
+import smtplib
 import time
-import textwrap
 from dataclasses import dataclass
 from datetime import date, datetime
+from email.message import EmailMessage
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -55,19 +56,18 @@ ROOT = Path(_setting("MOMENT_ROOT", "root", "/config/www/moment-in-history"))
 IMAGE_PATH = ROOT / "moment-in-history.png"
 EVENT_JSON_PATH = ROOT / "event.json"
 EVENT_HTML_PATH = ROOT / "event.html"
-EVENT_DETAILS_IMAGE_PATH = ROOT / "event-details.png"
 LOCK_PATH = ROOT / ".generation.lock"
 LOG_PATH = ROOT / "generation.log"
 
 BRITANNICA_URL = "https://www.britannica.com/on-this-day"
 WIKIMEDIA_URL = "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/{month:02d}/{day:02d}"
 
-OLLAMA_BASE_URL = _setting("OLLAMA_BASE_URL", "primary_ollama_url", "http://openclaw.borgcube.com:11434")
-OLLAMA_FALLBACK_URL = _setting("OLLAMA_FALLBACK_URL", "fallback_ollama_url", "http://storage01.borgcube.com:11434")
+OLLAMA_BASE_URL = _setting("OLLAMA_BASE_URL", "primary_ollama_url", "http://ollama01.borgcube.com:11434")
+OLLAMA_FALLBACK_URL = _setting("OLLAMA_FALLBACK_URL", "fallback_ollama_url", "http://ollama02.borgcube.com:11434")
 TEXT_MODEL = _setting("MOMENT_TEXT_MODEL", "text_model", "qwen3.8:27b-mlx")
 FALLBACK_TEXT_MODEL = _setting("MOMENT_FALLBACK_TEXT_MODEL", "fallback_text_model", "gemma4:e4b")
 IMAGE_MODEL = _setting("MOMENT_IMAGE_MODEL", "image_model", "Tongyi-MAI/Z-Image-Turbo")
-IMAGE_BACKEND_URL = _setting("MOMENT_IMAGE_BACKEND_URL", "image_backend_url", "http://storage01.borgcube.com:8188")
+IMAGE_BACKEND_URL = _setting("MOMENT_IMAGE_BACKEND_URL", "image_backend_url", "http://ollama02.borgcube.com:8188")
 IMAGE_BACKEND_FALLBACK_URL = os.environ.get("MOMENT_IMAGE_BACKEND_FALLBACK_URL", str(ADDON_OPTIONS.get("image_backend_fallback_url", ""))).strip()
 IMAGE_PROVIDER = _setting("MOMENT_IMAGE_PROVIDER", "image_provider", "openai").strip().lower()
 OPENAI_API_KEY = _setting("OPENAI_API_KEY", "openai_api_key", "").strip()
@@ -81,6 +81,14 @@ IMAGE_STEPS = int(_setting("MOMENT_IMAGE_STEPS", "image_steps", "9"))
 IMAGE_URL = _setting("MOMENT_IMAGE_URL", "image_url", "/local/moment-in-history/moment-in-history.png")
 SCHEDULE_TIME = _setting("MOMENT_SCHEDULE_TIME", "schedule_time", "00:05")
 RUN_ON_STARTUP = _setting("MOMENT_RUN_ON_STARTUP", "run_on_startup", "true").lower() in {"1", "true", "yes", "on"}
+EMAIL_RECIPIENTS = _setting("EMAIL_RECIPIENTS", "email_recipients", "").strip()
+EMAIL_SMTP_HOST = _setting("EMAIL_SMTP_HOST", "email_smtp_host", "").strip()
+EMAIL_SMTP_PORT = int(_setting("EMAIL_SMTP_PORT", "email_smtp_port", "587"))
+EMAIL_SMTP_USERNAME = _setting("EMAIL_SMTP_USERNAME", "email_smtp_username", "").strip()
+EMAIL_SMTP_PASSWORD = _setting("EMAIL_SMTP_PASSWORD", "email_smtp_password", "")
+EMAIL_FROM = _setting("EMAIL_FROM", "email_from", "").strip()
+EMAIL_SMTP_USE_TLS = _setting("EMAIL_SMTP_USE_TLS", "email_smtp_use_tls", "true").lower() in {"1", "true", "yes", "on"}
+EMAIL_SMTP_USE_SSL = _setting("EMAIL_SMTP_USE_SSL", "email_smtp_use_ssl", "false").lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -147,7 +155,7 @@ def fetch_bytes(url: str, *, timeout: int = 30) -> bytes:
     request = Request(
         url,
         headers={
-            "User-Agent": "BORGcube-MomentInHistory/1.0 (+https://openclaw.borgcube.com)",
+            "User-Agent": "BORGcube-MomentInHistory/1.0 (+https://github.com/borgcube/HA-Moment-in-History-app)",
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         },
     )
@@ -467,63 +475,48 @@ def write_event_pages(metadata: dict[str, Any]) -> None:
 """,
         encoding="utf-8",
     )
-    write_event_details_image(metadata)
-
-
-def write_event_details_image(metadata: dict[str, Any]) -> None:
-    """Publish disclosure content as an image so HA needs no YAML sensors or iframe."""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except ImportError:
-        log("Pillow is not installed; disclosure image was not written")
-        return
-
-    width, height = 1600, 900
-    image = Image.new("RGB", (width, height), (17, 17, 17))
-    draw = ImageDraw.Draw(image)
-    font_candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/SFNS.ttf",
-        "/Library/Fonts/Arial.ttf",
-    ]
-    font_path = next((candidate for candidate in font_candidates if Path(candidate).exists()), None)
-
-    def font(size: int):
-        return ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
-
-    date_font = font(32)
-    heading_font = font(52)
-    body_font = font(30)
-    small_font = font(22)
-    margin = 80
-    y = 64
-    draw.text((margin, y), metadata["date_label"].upper(), fill=(217, 164, 65), font=date_font)
-    y += 62
-    draw.text((margin, y), "Event details", fill=(246, 241, 232), font=heading_font)
-    y += 88
-
-    def paragraph(label: str, value: str, *, gap: int = 28) -> None:
-        nonlocal y
-        draw.text((margin, y), label, fill=(217, 164, 65), font=small_font)
-        y += 34
-        lines = textwrap.wrap(clean_text(value), width=72) or [""]
-        for line in lines:
-            draw.text((margin, y), line, fill=(246, 241, 232), font=body_font)
-            y += 42
-        y += gap
-
-    paragraph("EVENT", metadata["event"], gap=24)
-    paragraph("TEN SECONDS BEFORE", metadata["pre_moment"], gap=24)
-    paragraph("SOURCE", f"{metadata['source']} — {metadata['source_url']}", gap=0)
-    image.save(EVENT_DETAILS_IMAGE_PATH, format="PNG", optimize=True)
-
-
 def log(message: str) -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     with LOG_PATH.open("a", encoding="utf-8") as handle:
         handle.write(f"{datetime.now(TIME_ZONE).isoformat()} {message}\n")
+
+
+def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
+    """Send the current image and readable event text through optional SMTP."""
+    recipients = [clean_text(value) for value in EMAIL_RECIPIENTS.split(",") if clean_text(value)]
+    if not recipients:
+        return
+    if not EMAIL_SMTP_HOST:
+        raise RuntimeError("email_recipients is set but email_smtp_host is empty")
+    if EMAIL_SMTP_USE_SSL and EMAIL_SMTP_USE_TLS:
+        raise RuntimeError("email_smtp_use_ssl and email_smtp_use_tls cannot both be enabled")
+
+    sender = EMAIL_FROM or EMAIL_SMTP_USERNAME or recipients[0]
+    message = EmailMessage()
+    message["Subject"] = f"Moment in history — {metadata['date_label']}"
+    message["From"] = sender
+    message["To"] = ", ".join(recipients)
+    message.set_content(
+        f"Moment in history — {metadata['date_label']}\n\n"
+        f"Event:\n{metadata['event']}\n\n"
+        f"Ten seconds before:\n{metadata['pre_moment']}\n\n"
+        f"Source: {metadata['source']}\n{metadata['source_url']}\n"
+    )
+    message.add_attachment(
+        image_path.read_bytes(),
+        maintype="image",
+        subtype="png",
+        filename="moment-in-history.png",
+    )
+
+    smtp_class = smtplib.SMTP_SSL if EMAIL_SMTP_USE_SSL else smtplib.SMTP
+    with smtp_class(EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, timeout=60) as server:
+        if EMAIL_SMTP_USE_TLS and not EMAIL_SMTP_USE_SSL:
+            server.starttls()
+        if EMAIL_SMTP_USERNAME:
+            server.login(EMAIL_SMTP_USERNAME, EMAIL_SMTP_PASSWORD)
+        server.send_message(message)
+    log(f"Email sent to {len(recipients)} recipient(s)")
 
 
 def generate(target_day: date) -> None:
@@ -581,6 +574,10 @@ def generate(target_day: date) -> None:
         "prompt": prompt,
     }
     write_event_pages(metadata)
+    try:
+        send_event_email(metadata, IMAGE_PATH)
+    except Exception as exc:  # noqa: BLE001 - email must not stop daily generation
+        log(f"Email delivery failed: {exc}")
     log(f"Generated {target_day.isoformat()} — {selected.text} ({len(events)} candidates; {source_status})")
 
 

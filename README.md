@@ -53,8 +53,8 @@ The app needs access to `/config` and writes generated files to `/config/www/mom
 Open the app's **Configuration** tab and set the values for your network. The following is an example of the option structure; it is documentation, not a file to paste into `configuration.yaml`:
 
 ```yaml
-primary_ollama_url: http://openclaw.example.local:11434
-fallback_ollama_url: http://storage01.example.local:11434
+primary_ollama_url: http://ollama01.example.local:11434
+fallback_ollama_url: http://ollama02.example.local:11434
 text_model: qwen3.8:27b-mlx
 fallback_text_model: gemma4:e4b
 
@@ -65,12 +65,22 @@ openai_image_quality: high
 openai_image_size: 1024x1024
 
 # Used when image_provider is lan, or when OpenAI fails and a LAN fallback is configured.
-image_backend_url: http://storage01.example.local:8188
+image_backend_url: http://ollama02.example.local:8188
 image_backend_fallback_url: ""
 image_model: Tongyi-MAI/Z-Image-Turbo
 image_width: 1024
 image_height: 1024
 image_steps: 9
+
+# Optional SMTP delivery. Leave email_recipients empty to disable email.
+email_recipients: "you@example.com, second@example.com"
+email_smtp_host: smtp.example.com
+email_smtp_port: 587
+email_smtp_username: "you@example.com"
+email_smtp_password: "set this only in the App Configuration tab"
+email_from: "you@example.com"
+email_smtp_use_tls: true
+email_smtp_use_ssl: false
 
 schedule_time: "00:05"
 run_on_startup: true
@@ -83,6 +93,10 @@ run_on_startup: true
 `lan` calls a compatible image service at `image_backend_url`. The LAN service must expose `POST /generate`, accept a JSON body containing `prompt`, `width`, `height`, and `steps`, and return a PNG image. The repository does not include that separate image service.
 
 The OpenAI path automatically tries the configured LAN image backend if the OpenAI request fails. Ollama remains the text/ranking service in either case.
+
+### Optional email delivery
+
+Set `email_recipients` to a comma-separated list to send each newly generated image by email. The message contains the event title, the readable “ten seconds before” text, the source link, and `moment-in-history.png` as an attachment. Email is sent directly through the configured SMTP server; STARTTLS on port 587 is the default. For implicit TLS on port 465, set `email_smtp_use_tls: false` and `email_smtp_use_ssl: true`. If delivery fails, the app records the error in `generation.log` and keeps the image generation successful.
 
 Never commit an API key to this repository, a dashboard YAML file, or a public issue.
 
@@ -160,7 +174,6 @@ The app writes these files under `/config/www/moment-in-history/`:
 | `moment-in-history.png` | Current dashboard artwork |
 | `event.json` | Current structured event metadata |
 | `event.html` | Plain-text disclosure page |
-| `event-details.png` | Legacy generated details image; not used by the supplied dashboard card |
 | `generation.log` | Daily generation log |
 
 ## Schedule and source fallback
@@ -171,7 +184,7 @@ The app runs once on startup when `run_on_startup` is enabled, then checks every
 
 ### The disclosure text is from yesterday
 
-Reload the Home Assistant dashboard once. The supplied card uses `event.html?v=2`, and the page fetches `event.json` with a unique query on every load. If you customized the card, make sure it is not still pointing at `event-details.png`.
+Reload the Home Assistant dashboard once. The supplied card uses `event.html?v=2`, and the page fetches `event.json` with a unique query on every load.
 
 ### No image is generated
 
