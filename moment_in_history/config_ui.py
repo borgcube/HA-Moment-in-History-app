@@ -636,12 +636,37 @@ def _find_notify_entity(states: list[dict[str, Any]], email: str) -> str | None:
     return None
 
 
+def _find_notify_entity_in_registry(
+    registry: Any,
+    *,
+    entry_id: str,
+    subentry_id: str,
+    email: str,
+) -> str | None:
+    """Resolve an SMTP notify entity using Home Assistant's entity registry."""
+    entities = registry.get("entities", []) if isinstance(registry, dict) else registry
+    if not isinstance(entities, list):
+        return None
+    expected_unique_id = f"{entry_id}_{email}".casefold()
+    for entity in entities:
+        if not isinstance(entity, dict) or not str(entity.get("entity_id", "")).startswith("notify."):
+            continue
+        if str(entity.get("config_entry_id", "")) != entry_id:
+            continue
+        if subentry_id and str(entity.get("config_subentry_id", "")) == subentry_id:
+            return str(entity["entity_id"])
+        if str(entity.get("unique_id", "")).casefold() == expected_unique_id:
+            return str(entity["entity_id"])
+    return None
+
+
 def smtp_recipient_details(api_url: str, token: str) -> dict[str, Any]:
     """Return SMTP recipient subentries and their current notify entity IDs."""
     entries = _smtp_config_entries(api_url, token)
     if not entries:
         return {"available": False, "message": "No Home Assistant SMTP integration is configured.", "recipients": []}
     states = _home_assistant_states(api_url, token)
+    registry: Any = None
     recipients: list[dict[str, Any]] = []
     for entry in entries:
         entry_id = str(entry.get("entry_id", ""))
@@ -654,12 +679,30 @@ def smtp_recipient_details(api_url: str, token: str) -> dict[str, Any]:
             if not isinstance(subentry, dict) or subentry.get("subentry_type") != "recipient":
                 continue
             email = str(subentry.get("unique_id", "")).strip()
+            subentry_id = str(subentry.get("subentry_id", ""))
+            entity_id = _find_notify_entity(states, email)
+            if not entity_id:
+                if registry is None:
+                    try:
+                        registry = _websocket_command(
+                            api_url,
+                            token,
+                            {"type": "config/entity_registry/list"},
+                        )
+                    except Exception:
+                        registry = []
+                entity_id = _find_notify_entity_in_registry(
+                    registry,
+                    entry_id=entry_id,
+                    subentry_id=subentry_id,
+                    email=email,
+                )
             recipients.append(
                 {
                     "email": email,
-                    "entity_id": _find_notify_entity(states, email),
+                    "entity_id": entity_id,
                     "entry_id": entry_id,
-                    "subentry_id": str(subentry.get("subentry_id", "")),
+                    "subentry_id": subentry_id,
                 }
             )
     return {"available": True, "message": "SMTP recipients are managed by Home Assistant.", "recipients": recipients}
@@ -689,7 +732,7 @@ def _smtp_reconfigure_succeeded(result: Any) -> bool:
 
 def _wait_for_smtp_recipient(api_url: str, token: str, email: str) -> dict[str, Any]:
     """Wait for Home Assistant to expose the notify entity after a flow creates it."""
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         details = smtp_recipient_details(api_url, token)
         for recipient in details["recipients"]:
@@ -711,7 +754,7 @@ def add_smtp_recipient(api_url: str, token: str, email: str) -> dict[str, Any]:
     for recipient in details["recipients"]:
         if recipient["email"].casefold() == email.casefold():
             if not recipient.get("entity_id"):
-                raise RuntimeError("Home Assistant created the recipient but its notify entity is not ready yet")
+                return _wait_for_smtp_recipient(api_url, token, email)
             return recipient
     entry_id = str(entries[0].get("entry_id", ""))
     flow = _request_json(

@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.19 starting", report)
+            self.assertIn("Moment in history App 1.9.20 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -676,6 +676,38 @@ class ModelSelectionTest(unittest.TestCase):
             request_json.call_args_list[4].kwargs["payload"],
             {"recipient": "new@example.com"},
         )
+
+    def test_smtp_recipient_details_resolves_entity_from_entity_registry(self):
+        entry = {"domain": "smtp", "entry_id": "smtp-entry"}
+        with patch.object(
+            config_ui,
+            "_request_json",
+            side_effect=[[entry], []],
+        ), patch.object(
+            config_ui,
+            "_websocket_command",
+            side_effect=[
+                [{
+                    "subentry_id": "subentry-1",
+                    "subentry_type": "recipient",
+                    "unique_id": "new@example.com",
+                }],
+                {
+                    "entities": [{
+                        "entity_id": "notify.smtp_recipient",
+                        "config_entry_id": "smtp-entry",
+                        "config_subentry_id": "subentry-1",
+                        "unique_id": "smtp-entry_new@example.com",
+                    }]
+                },
+            ],
+        ):
+            details = config_ui.smtp_recipient_details(
+                "http://supervisor/core/api",
+                "secret-token",
+            )
+
+        self.assertEqual(details["recipients"][0]["entity_id"], "notify.smtp_recipient")
 
     def test_smtp_setup_flow_creates_integration_and_first_recipient_without_retaining_password(self):
         recipient = {
