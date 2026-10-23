@@ -1,4 +1,4 @@
-"""Small Home Assistant Ingress UI for discovering and selecting model IDs."""
+"""Home Assistant Ingress UI for configuring Moment in history."""
 
 from __future__ import annotations
 
@@ -21,7 +21,39 @@ from urllib.request import Request, urlopen
 OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
 MODEL_FIELDS = ("text_model", "fallback_text_model", "openai_image_model")
 ENDPOINT_FIELDS = ("primary_ollama_url", "fallback_ollama_url")
-SELECTABLE_FIELDS = ENDPOINT_FIELDS + MODEL_FIELDS + ("email_notify_entity",)
+IMAGE_ENDPOINT_FIELDS = ("image_backend_url", "image_backend_fallback_url")
+WEB_SETTINGS_FIELDS = (
+    *ENDPOINT_FIELDS,
+    *MODEL_FIELDS,
+    *IMAGE_ENDPOINT_FIELDS,
+    "image_provider",
+    "openai_api_key",
+    "openai_image_quality",
+    "image_model",
+    "comfyui_model",
+    "email_notify_entity",
+    "email_camera_entity",
+    "schedule_time",
+)
+SELECTABLE_FIELDS = WEB_SETTINGS_FIELDS
+DEFAULT_WEB_OPTIONS = {
+    "primary_ollama_url": "http://ollama01.borgcube.com:11434",
+    "fallback_ollama_url": "http://ollama02.borgcube.com:11434",
+    "text_model": "qwen3.8:27b-mlx",
+    "fallback_text_model": "gemma4:e4b",
+    "image_backend_url": "http://ollama02.borgcube.com:8188",
+    "image_backend_fallback_url": "",
+    "image_provider": "openai",
+    "openai_api_key": "",
+    "openai_image_model": "gpt-image-2",
+    "openai_image_quality": "high",
+    "image_model": "Tongyi-MAI/Z-Image-Turbo",
+    "comfyui_model": "sd_xl_turbo_1.0.safetensors",
+    "email_notify_entity": "",
+    "email_camera_entity": "camera.moment_in_history",
+    "schedule_time": "00:05",
+}
+URL_FIELDS = (*ENDPOINT_FIELDS, *IMAGE_ENDPOINT_FIELDS)
 MAX_REQUEST_BYTES = 16 * 1024
 
 
@@ -39,7 +71,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.8.9",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.0",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -183,9 +215,16 @@ def discover_models(options: dict[str, Any]) -> dict[str, Any]:
             "fallback_ollama_url": _display_url(fallback_url),
             "text_model": str(options.get("text_model", "")),
             "fallback_text_model": str(options.get("fallback_text_model", "")),
-            "openai_image_model": str(options.get("openai_image_model", "")),
-            "email_notify_entity": str(options.get("email_notify_entity", "")),
+            "image_backend_url": _display_url(str(options.get("image_backend_url", "")).strip()),
+            "image_backend_fallback_url": _display_url(str(options.get("image_backend_fallback_url", "")).strip()),
             "image_provider": str(options.get("image_provider", "openai")),
+            "openai_image_model": str(options.get("openai_image_model", "")),
+            "openai_image_quality": str(options.get("openai_image_quality", "high")),
+            "image_model": str(options.get("image_model", "")),
+            "comfyui_model": str(options.get("comfyui_model", "")),
+            "email_notify_entity": str(options.get("email_notify_entity", "")),
+            "email_camera_entity": str(options.get("email_camera_entity", "")),
+            "schedule_time": str(options.get("schedule_time", "00:05")),
             "openai_key_present": bool(api_key),
         },
         "models": {
@@ -615,11 +654,11 @@ def _page() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Moment in history — model selection</title>
+  <title>Moment in history — configuration</title>
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; }
     body { margin: 0; background: #111827; color: #f3f4f6; }
-    main { max-width: 760px; margin: auto; padding: 24px; }
+    main { max-width: 860px; margin: auto; padding: 24px; }
     section { background: #1f2937; border-radius: 12px; padding: 18px; margin: 16px 0; }
     h1 { margin-top: 0; font-size: 1.55rem; }
     h2 { font-size: 1.1rem; margin: 0 0 8px; }
@@ -641,6 +680,9 @@ def _page() -> str:
     .status { min-height: 1.4em; margin-top: 12px; }
     .error { color: #fca5a5; margin: 8px 0; }
     .hint { color: #9ca3af; font-size: .9rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 14px; }
+    .grid > div { min-width: 0; }
+    .full { grid-column: 1 / -1; }
     .toggle { display: flex; gap: 10px; align-items: center; margin: 8px 0 14px; }
     .toggle input { width: auto; }
     dialog { max-width: 680px; width: calc(100% - 32px); border: 1px solid #4b5563; border-radius: 12px; background: #1f2937; color: #f3f4f6; }
@@ -652,26 +694,86 @@ def _page() -> str:
 </head>
 <body>
 <main>
-  <h1>Moment in history — model selection</h1>
-  <p>This is Home Assistant’s configuration page, not Ollama Open WebUI. Model discovery uses the provider APIs directly: Ollama <code>/api/tags</code> and OpenAI <code>/v1/models</code>. Enter or edit the Ollama API URLs below; model lists query those values automatically. Saving a selection updates the App options through Home Assistant and restarts the App.</p>
+  <h1>Moment in history — configuration</h1>
+  <p>This is the app’s configuration page. Home Assistant App Configuration contains only the core image and restart controls. Configure providers, models, schedules, and email here; changes are saved through Home Assistant and restart the app without generating an image unless you explicitly enable that option.</p>
 
   <section>
-    <h2>Ollama</h2>
-    <label for="primary-url-input">Primary Ollama API URL</label>
-    <input id="primary-url-input" type="url" inputmode="url" placeholder="http://ollama01.example.local:11434">
-    <label for="primary-model">Primary Ollama model</label>
-    <select id="primary-model"></select>
-    <label for="fallback-url-input">Fallback Ollama API URL</label>
-    <input id="fallback-url-input" type="url" inputmode="url" placeholder="http://ollama02.example.local:11434">
-    <label for="fallback-model">Fallback Ollama model</label>
-    <select id="fallback-model"></select>
+    <h2>Text and event selection</h2>
+    <p class="hint">Models are discovered directly from the Ollama APIs using <code>/api/tags</code>. Open WebUI is not required.</p>
+    <div class="grid">
+      <div>
+        <label for="primary-url-input">Primary Ollama API URL</label>
+        <input id="primary-url-input" type="url" inputmode="url" placeholder="http://ollama01.example.local:11434">
+      </div>
+      <div>
+        <label for="fallback-url-input">Fallback Ollama API URL</label>
+        <input id="fallback-url-input" type="url" inputmode="url" placeholder="http://ollama02.example.local:11434">
+      </div>
+      <div>
+        <label for="primary-model">Primary text model</label>
+        <select id="primary-model"></select>
+      </div>
+      <div>
+        <label for="fallback-model">Fallback text model</label>
+        <select id="fallback-model"></select>
+      </div>
+    </div>
   </section>
 
   <section>
-    <h2>OpenAI Images</h2>
-    <p class="hint" id="openai-status">The list is queried only when an OpenAI API key is configured.</p>
-    <label for="openai-model">OpenAI image model</label>
-    <select id="openai-model"></select>
+    <h2>Image generation</h2>
+    <div class="grid">
+      <div>
+        <label for="image-provider">Image provider</label>
+        <select id="image-provider">
+          <option value="openai">OpenAI Images</option>
+          <option value="comfyui">ComfyUI</option>
+          <option value="lan">Compatible local image API</option>
+        </select>
+      </div>
+      <div>
+        <label for="openai-quality">OpenAI image quality</label>
+        <select id="openai-quality">
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <div class="full">
+        <label for="openai-key">OpenAI API key</label>
+        <input id="openai-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved key">
+        <label class="toggle"><input id="clear-openai-key" type="checkbox"> Clear the saved OpenAI API key</label>
+        <p class="hint" id="openai-status">The key is stored by Home Assistant and is never returned to this page.</p>
+      </div>
+      <div>
+        <label for="openai-model">OpenAI image model</label>
+        <select id="openai-model"></select>
+      </div>
+      <div>
+        <label for="image-model">Local image model</label>
+        <input id="image-model" type="text" placeholder="Tongyi-MAI/Z-Image-Turbo">
+      </div>
+      <div>
+        <label for="image-backend-url">Local image API / ComfyUI URL</label>
+        <input id="image-backend-url" type="url" inputmode="url" placeholder="http://ollama02.example.local:8188">
+      </div>
+      <div>
+        <label for="image-backend-fallback-url">Fallback image API URL</label>
+        <input id="image-backend-fallback-url" type="url" inputmode="url" placeholder="Optional">
+      </div>
+      <div class="full">
+        <label for="comfyui-model">ComfyUI checkpoint filename</label>
+        <input id="comfyui-model" type="text" placeholder="sd_xl_turbo_1.0.safetensors">
+        <p class="hint">Image size is selected in the App Configuration page. Image steps are also there and apply only to local diffusion backends; OpenAI ignores them.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Daily schedule</h2>
+    <label for="schedule-time">Daily generation time</label>
+    <input id="schedule-time" type="time" required>
+    <p class="hint">The app checks every 30 seconds and generates once after this local time. Restarts preserve the current image.</p>
   </section>
 
   <section>
@@ -680,17 +782,19 @@ def _page() -> str:
     <p class="hint" id="email-status">Enable email delivery to check Home Assistant SMTP and configure it if needed.</p>
     <label for="email-entity">Existing Home Assistant notify entities</label>
     <select id="email-entity" multiple size="4"></select>
+    <label for="email-camera-entity">Image attachment camera entity</label>
+    <input id="email-camera-entity" type="text" placeholder="camera.moment_in_history">
     <label for="email-recipient">Add an SMTP email recipient</label>
     <div class="recipient-row">
       <input id="email-recipient" type="text" inputmode="email" autocomplete="email" placeholder="name@example.com — press Space or Enter">
       <button id="add-email" type="button">Add email</button>
     </div>
     <div class="pills" id="managed-recipients" aria-live="polite"></div>
-    <p class="hint">Added addresses are created through Home Assistant’s SMTP integration. Removing a pill removes only the SMTP recipient created through this page. Select Save selections to apply delivery targets.</p>
+    <p class="hint">Added addresses are created through Home Assistant’s SMTP integration. Removing a pill removes only the SMTP recipient created through this page. Select Save configuration to apply delivery targets.</p>
   </section>
 
   <button class="secondary" id="refresh" type="button">Refresh now</button>
-  <button id="save" type="button">Save selections</button>
+  <button id="save" type="button">Save configuration</button>
   <div class="status" id="status" role="status"></div>
   <div id="errors"></div>
 </main>
@@ -731,8 +835,7 @@ def _page() -> str:
   const fields = [
     { id: 'primary-model', config: 'text_model', result: 'primary_ollama', label: 'Saved value' },
     { id: 'fallback-model', config: 'fallback_text_model', result: 'fallback_ollama', label: 'Saved value' },
-    { id: 'openai-model', config: 'openai_image_model', result: 'openai_image', label: 'Saved value' },
-    { id: 'email-entity', config: 'email_notify_entity', result: 'email_notify', label: 'Saved value', allowEmpty: true, multiple: true }
+    { id: 'openai-model', config: 'openai_image_model', result: 'openai_image', label: 'Saved value' }
   ];
   const status = document.getElementById('status');
   const errors = document.getElementById('errors');
@@ -762,16 +865,29 @@ def _page() -> str:
     }
     select.disabled = disabled;
   }
+  function setValue(id, value) {
+    document.getElementById(id).value = value || '';
+  }
   function render(data) {
     const config = data.config || {};
     const models = data.models || {};
-    document.getElementById('primary-url-input').value = config.primary_ollama_url || '';
-    document.getElementById('fallback-url-input').value = config.fallback_ollama_url || '';
+    setValue('primary-url-input', config.primary_ollama_url);
+    setValue('fallback-url-input', config.fallback_ollama_url);
     fill(fields[0], config.text_model, models.primary_ollama || [], false);
     fill(fields[1], config.fallback_text_model, models.fallback_ollama || [], false);
     fill(fields[2], config.openai_image_model, models.openai_image || [], !config.openai_key_present);
+    setValue('image-provider', config.image_provider || 'openai');
+    setValue('openai-quality', config.openai_image_quality || 'high');
+    setValue('image-model', config.image_model);
+    setValue('image-backend-url', config.image_backend_url);
+    setValue('image-backend-fallback-url', config.image_backend_fallback_url);
+    setValue('comfyui-model', config.comfyui_model);
+    setValue('schedule-time', config.schedule_time || '00:05');
+    setValue('email-camera-entity', config.email_camera_entity || 'camera.moment_in_history');
+    const emailSelect = document.getElementById('email-entity');
     const email = data.email || {};
-    fill(fields[3], config.email_notify_entity, email.notify_entities || [], false);
+    fill({ id: 'email-entity', multiple: true, allowEmpty: true, label: 'Saved value' }, config.email_notify_entity, email.notify_entities || [], false);
+    emailSelect.setAttribute('aria-label', 'Existing Home Assistant notify entities');
     if (!emailEnableRequested) emailEnabled.checked = Boolean(config.email_notify_entity);
     const managed = email.managed_recipients || [];
     const pills = document.getElementById('managed-recipients');
@@ -790,8 +906,8 @@ def _page() -> str:
       pills.appendChild(pill);
     });
     document.getElementById('openai-status').textContent = config.openai_key_present
-      ? 'Image models visible to the configured API key are listed below.'
-      : 'Enter an OpenAI API key in App Configuration first, then refresh this page.';
+      ? 'OpenAI image models visible to the saved API key are listed below. Enter a replacement key above only when needed.'
+      : 'No OpenAI API key is saved. Add one above to discover OpenAI image models.';
     document.getElementById('email-status').textContent = email.smtp_configured === false
       ? 'Home Assistant SMTP is not configured. Enable email or choose Add email to configure it now.'
       : (email.management_available
@@ -889,7 +1005,7 @@ def _page() -> str:
         const select = document.getElementById('email-entity');
         Array.from(select.options).forEach(function (option) { if (option.value === entityId) option.selected = true; });
       }
-      status.textContent = 'Recipient added. Select Save selections to enable delivery to it.';
+      status.textContent = 'Recipient added. Select Save configuration to enable delivery to it.';
     } catch (error) {
       status.textContent = 'Unable to add recipient: ' + error.message;
     }
@@ -900,13 +1016,13 @@ def _page() -> str:
     try {
       await manageEmail('remove', email);
       await refresh();
-      status.textContent = 'Recipient removed. Select Save selections to update delivery targets.';
+      status.textContent = 'Recipient removed. Select Save configuration to update delivery targets.';
     } catch (error) {
       status.textContent = 'Unable to remove recipient: ' + error.message;
     }
   }
   async function save() {
-    status.textContent = 'Saving model selection…';
+    status.textContent = 'Saving configuration…';
     const values = {};
     values.primary_ollama_url = document.getElementById('primary-url-input').value.trim();
     values.fallback_ollama_url = document.getElementById('fallback-url-input').value.trim();
@@ -916,6 +1032,19 @@ def _page() -> str:
         ? Array.from(select.selectedOptions).map(function (option) { return option.value; }).filter(Boolean).join(',')
         : select.value;
     });
+    values.image_provider = document.getElementById('image-provider').value;
+    values.openai_image_quality = document.getElementById('openai-quality').value;
+    values.image_model = document.getElementById('image-model').value.trim();
+    values.image_backend_url = document.getElementById('image-backend-url').value.trim();
+    values.image_backend_fallback_url = document.getElementById('image-backend-fallback-url').value.trim();
+    values.comfyui_model = document.getElementById('comfyui-model').value.trim();
+    values.email_camera_entity = document.getElementById('email-camera-entity')
+      ? document.getElementById('email-camera-entity').value.trim()
+      : '';
+    values.schedule_time = document.getElementById('schedule-time').value;
+    const openaiKey = document.getElementById('openai-key').value;
+    if (openaiKey) values.openai_api_key = openaiKey;
+    values.clear_openai_key = document.getElementById('clear-openai-key').checked;
     if (!emailEnabled.checked) values.email_notify_entity = '';
     try {
       const response = await fetch(apiPath('api/config'), {
@@ -925,7 +1054,7 @@ def _page() -> str:
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'save failed');
-      status.textContent = 'Saved. Home Assistant is restarting the App to apply the selection.';
+      status.textContent = 'Saved. Home Assistant is restarting the App to apply the configuration.';
     } catch (error) {
       status.textContent = 'Unable to save: ' + error.message;
     }
@@ -997,7 +1126,7 @@ def _page() -> str:
         }
         Array.from(emailEntity.options).forEach(function (option) { if (option.value === entityId) option.selected = true; });
       }
-      status.textContent = current ? 'SMTP configured and recipient added. Select Save selections to enable delivery.' : 'SMTP configured and recipient added.';
+      status.textContent = current ? 'SMTP configured and recipient added. Select Save configuration to enable delivery.' : 'SMTP configured and recipient added.';
     } catch (error) {
       smtpStatus.textContent = 'Unable to configure SMTP: ' + error.message;
     }
@@ -1156,17 +1285,30 @@ def start_server(
                         self._json(200, {"removed": email})
                         return
                     raise ValueError("automatic SMTP recipient management is unavailable")
-                changes = {
-                    field: str(payload[field]).strip()
-                    for field in SELECTABLE_FIELDS
-                    if field in payload
-                    and (str(payload[field]).strip() or field in ENDPOINT_FIELDS or field == 'email_notify_entity')
-                }
+                changes: dict[str, str] = {}
+                for field in SELECTABLE_FIELDS:
+                    if field not in payload:
+                        continue
+                    value = str(payload[field]).strip()
+                    if value or field in URL_FIELDS or field in {"email_notify_entity", "email_camera_entity", "schedule_time"}:
+                        changes[field] = value
+                    elif field == "openai_api_key":
+                        # A blank key is meaningful only when the user explicitly
+                        # selected the clear-key control in the Web UI.
+                        continue
+                if payload.get("clear_openai_key") is True:
+                    changes["openai_api_key"] = ""
                 if not changes:
                     raise ValueError("no model selection was supplied")
                 if any(len(value) > 256 or any(ord(char) < 32 for char in value) for value in changes.values()):
                     raise ValueError("invalid model selection")
-                for field in ENDPOINT_FIELDS:
+                if "image_provider" in changes and changes["image_provider"] not in {"openai", "lan", "comfyui"}:
+                    raise ValueError("image_provider must be openai, lan, or comfyui")
+                if "openai_image_quality" in changes and changes["openai_image_quality"] not in {"low", "medium", "high"}:
+                    raise ValueError("openai_image_quality must be low, medium, or high")
+                if "schedule_time" in changes and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", changes["schedule_time"]):
+                    raise ValueError("schedule_time must use HH:MM")
+                for field in URL_FIELDS:
                     if field not in changes or not changes[field]:
                         continue
                     parsed = urlsplit(changes[field])

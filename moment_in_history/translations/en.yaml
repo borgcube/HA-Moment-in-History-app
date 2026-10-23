@@ -1,0 +1,16 @@
+configuration:
+  image_size:
+    name: Image size
+    description: OpenAI-compatible output size. The same size is used for local image backends.
+  image_steps:
+    name: Image steps
+    description: Advanced local-backend setting. Diffusion sampling steps used by ComfyUI; ignored by OpenAI. Leave at the default unless you know the backend needs another value.
+  archive_images:
+    name: Archive images
+    description: Keep dated PNG copies under the archive folder. Each image is approximately 2 MB.
+  run_on_startup:
+    name: Run on startup
+    description: Allow the normal daily check when the app starts. It still waits for the configured daily schedule unless Generate on restart is enabled.
+  generate_on_restart:
+    name: Generate on restart
+    description: Generate immediately when the app starts, even before the daily schedule. Disabled by default to avoid unexpected image costs.

@@ -1,5 +1,5 @@
 name: Moment in history
-version: "1.8.9"
+version: "1.9.0"
 slug: moment_in_history
 description: Daily historical moment artwork for the Home Assistant dashboard
 startup: application
@@ -18,51 +18,14 @@ map:
     path: /config
     read_only: false
 options:
-  primary_ollama_url: http://ollama01.borgcube.com:11434
-  fallback_ollama_url: http://ollama02.borgcube.com:11434
-  text_model: qwen3.8:27b-mlx
-  fallback_text_model: gemma4:e4b
-  image_backend_url: http://ollama02.borgcube.com:8188
-  image_backend_fallback_url: ""
-  image_provider: openai
-  openai_api_key: ""
-  openai_image_model: gpt-image-2
-  openai_image_quality: high
-  openai_image_size: 1024x1024
-  image_model: Tongyi-MAI/Z-Image-Turbo
-  comfyui_model: sd_xl_turbo_1.0.safetensors
-  image_width: 1024
-  image_height: 1024
+  image_size: 1024x1024
   image_steps: 9
-  # Optional fallback/advanced setting. Use one or more comma-separated notify entities;
-  # the Ingress UI can create SMTP recipients and select them for you.
-  email_notify_entity: ""
-  email_camera_entity: camera.moment_in_history
   archive_images: false
-  schedule_time: "00:05"
-  # Retained for compatibility with older configurations; use generate_on_restart.
   run_on_startup: false
   generate_on_restart: false
 schema:
-  primary_ollama_url: str
-  fallback_ollama_url: str
-  text_model: str
-  fallback_text_model: str
-  image_backend_url: str
-  image_backend_fallback_url: str
-  image_provider: match(openai|lan|comfyui)
-  openai_api_key: password
-  openai_image_model: str
-  openai_image_quality: match(low|medium|high)
-  openai_image_size: match(^[0-9]+x[0-9]+$)
-  image_model: str
-  comfyui_model: str
-  image_width: int
-  image_height: int
-  image_steps: int
-  email_notify_entity: str
-  email_camera_entity: str
+  image_size: list(1024x1024|1536x1024|1024x1536)
+  image_steps: int(1,50)
   archive_images: bool
-  schedule_time: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
   run_on_startup: bool
   generate_on_restart: bool

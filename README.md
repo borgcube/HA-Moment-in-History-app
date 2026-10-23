@@ -58,9 +58,7 @@ The App includes a Home Assistant **Ingress** configuration page. Open the App's
 - the fallback Ollama endpoint's `/api/tags` response; and
 - OpenAI's `/v1/models` endpoint, filtered to image-capable model IDs, when an OpenAI API key is configured.
 
-Enter or edit the primary and fallback Ollama API URLs in this page. Choose the primary text model, fallback text model, OpenAI image model, and one or more notification entities from the resulting dropdowns, then select **Save selections**. The App saves the endpoint and model values through Home Assistant Supervisor and restarts so the new choices become active. The API key is used only inside the App and is never sent to the browser or written to the model-discovery response.
-
-The ordinary App **Configuration** tab remains the source for the OpenAI API key and remains compatible with existing installations. The Ingress page is the recommended way to enter endpoint URLs and choose valid model IDs without typing them.
+Enter or edit the primary and fallback Ollama API URLs in this page. Choose the primary text model, fallback text model, OpenAI image model, image provider, image quality, local image backend, schedule, and one or more notification entities from the organized sections, then select **Save configuration**. The App saves these Web UI settings through Home Assistant Supervisor and restarts so the new choices become active. The OpenAI key is stored by Home Assistant and is never returned to the browser or written to the model-discovery response.
 
 ### Automatic updates from GitHub
 
@@ -68,48 +66,27 @@ After installing the App from this GitHub repository, open its **Info** tab and 
 
 Every code or configuration release must increment the `version` in `moment_in_history/config.yaml`. Supervisor preserves the App options and the generated files during an update. With `generate_on_restart: false`, the update restart will not request a new image.
 
-## App configuration
+## App Configuration
 
-Open the app's **Configuration** tab and set the values for your network. The following is an example of the option structure; it is documentation, not a file to paste into `configuration.yaml`:
+The app's **Configuration** tab is intentionally small. It contains only settings that affect image output size, local diffusion work, storage, and startup behavior:
 
-```yaml
-primary_ollama_url: http://ollama01.example.local:11434
-fallback_ollama_url: http://ollama02.example.local:11434
-text_model: qwen3.8:27b-mlx
-fallback_text_model: gemma4:e4b
+| Setting | Purpose |
+| --- | --- |
+| Image size | Dropdown with the OpenAI-compatible sizes `1024x1024`, `1536x1024`, and `1024x1536`. The selected dimensions are also used by local image backends. |
+| Image steps | Advanced local-backend control for ComfyUI diffusion sampling. OpenAI ignores it; leave the default unless the selected checkpoint needs another value. |
+| Archive images | Keeps dated copies under `/config/www/moment-in-history/archive/`; each image is approximately 2 MB. |
+| Run on startup | Allows the normal daily check when the app starts. |
+| Generate on restart | Generates immediately at startup, before the daily schedule. It is disabled by default to avoid unexpected image costs. |
 
-image_provider: openai
-openai_api_key: "set this only in the App Configuration tab"
-openai_image_model: gpt-image-2
-openai_image_quality: high
-openai_image_size: 1024x1024
-
-# Used when image_provider is lan, or when OpenAI fails and a LAN fallback is configured.
-image_backend_url: http://ollama02.example.local:8188
-image_backend_fallback_url: ""
-image_model: Tongyi-MAI/Z-Image-Turbo
-comfyui_model: sd_xl_turbo_1.0.safetensors
-image_width: 1024
-image_height: 1024
-image_steps: 9
-
-# Optional Home Assistant SMTP delivery. Use one or more notify entities created
-# by the Home Assistant SMTP integration; leave empty to disable.
-email_notify_entity: notify.moment_in_history_recipient
-email_camera_entity: camera.moment_in_history
-archive_images: false
-
-schedule_time: "00:05"
-generate_on_restart: false
-```
+Provider URLs, models, the OpenAI key, image quality, schedule time, email, and ComfyUI settings are configured in **Info → Open Web UI**. Existing installations keep their saved values and can edit them there without regenerating the current image.
 
 ### Image providers
 
-`openai` uses the OpenAI Images API and requires an OpenAI API key. A ChatGPT or Claude subscription is not an API key and cannot be used directly by this app.
+Configure the provider in **Info → Open Web UI**. `openai` uses the OpenAI Images API and requires an OpenAI API key. A ChatGPT or Claude subscription is not an API key and cannot be used directly by this app.
 
 `lan` calls a compatible image service at `image_backend_url`. The LAN service must expose `POST /generate`, accept a JSON body containing `prompt`, `width`, `height`, and `steps`, and return a PNG image. The repository does not include that separate image service.
 
-`comfyui` calls the ComfyUI API at `image_backend_url`. It queues a native checkpoint/KSampler/VAEDecode/SaveImage workflow, polls `/history/{prompt_id}`, and downloads the PNG from `/view`. Set `comfyui_model` to the checkpoint filename in ComfyUI's `models/checkpoints` directory. The workflow uses `image_width`, `image_height`, and `image_steps`; SDXL Turbo is normally used with one step and square dimensions.
+`comfyui` calls the ComfyUI API at `image_backend_url`. It queues a native checkpoint/KSampler/VAEDecode/SaveImage workflow, polls `/history/{prompt_id}`, and downloads the PNG from `/view`. Set `comfyui_model` to the checkpoint filename in ComfyUI's `models/checkpoints` directory. The workflow uses the selected Image size and Image steps; SDXL Turbo is normally used with one step and square dimensions.
 
 The OpenAI path automatically tries the configured LAN image backend if the OpenAI request fails. Ollama remains the text/ranking service for all image providers.
 
@@ -146,11 +123,11 @@ homeassistant:
 
 ### Optional image archive
 
-Set `archive_images: true` to keep dated copies under `/config/www/moment-in-history/archive/YYYY/MM/`. Archiving is disabled by default so updates do not consume extra storage unexpectedly. A generated PNG is typically about **2 MB**, so archiving costs approximately 2 MB per day, or about 60 MB per 30-day month. The App logs the actual size of every archived image.
+Set **Archive images** to true in App Configuration to keep dated copies under `/config/www/moment-in-history/archive/YYYY/MM/`. Archiving is disabled by default so updates do not consume extra storage unexpectedly. A generated PNG is typically about **2 MB**, so archiving costs approximately 2 MB per day, or about 60 MB per 30-day month. The App logs the actual size of every archived image.
 
 ### Restart and update behavior
 
-`generate_on_restart` defaults to `false`. An App update or restart keeps the Supervisor configuration and the generated files under `/config/www/moment-in-history/`; it does not request a new image. The normal daily schedule remains active. Set `generate_on_restart: true` only when you intentionally want the App to generate immediately when its daemon starts. The older `run_on_startup` option remains in the schema for compatibility with existing installations, but it no longer controls generation.
+`generate_on_restart` defaults to `false`. An App update or restart keeps the Supervisor configuration and the generated files under `/config/www/moment-in-history/`; it does not request a new image. The normal daily schedule remains active. Set **Generate on restart** to true only when you intentionally want the App to generate immediately when its daemon starts. **Run on startup** controls whether the normal daily check is allowed during startup; it does not bypass the schedule.
 
 ### Startup and runtime logging
 
@@ -251,7 +228,7 @@ Check the app log and verify:
 
 - Both Ollama URLs are reachable from the Home Assistant App network.
 - The configured text model exists on the primary or fallback Ollama host.
-- `openai_api_key` is present when `image_provider` is `openai`.
+- An OpenAI API key is present in the Web UI when `image_provider` is `openai`.
 - The LAN image service is reachable when using `lan` or when relying on LAN fallback.
 
 ### The camera entity is missing

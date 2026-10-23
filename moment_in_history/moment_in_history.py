@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.8.9"
+APP_VERSION = "1.9.0"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -62,8 +62,15 @@ def _load_addon_options() -> dict[str, Any]:
 ADDON_OPTIONS = _load_addon_options()
 
 
+def _runtime_options() -> dict[str, Any]:
+    """Return Web UI settings merged with defaults and Supervisor options."""
+    options = dict(config_ui.DEFAULT_WEB_OPTIONS)
+    options.update(ADDON_OPTIONS)
+    return options
+
+
 def _setting(env_name: str, option_name: str, default: str) -> str:
-    return os.environ.get(env_name) or str(ADDON_OPTIONS.get(option_name, default))
+    return os.environ.get(env_name) or str(_runtime_options().get(option_name, default))
 
 
 ROOT = Path(_setting("MOMENT_ROOT", "root", "/config/www/moment-in-history"))
@@ -85,19 +92,45 @@ COMFYUI_MODEL = _setting(
     "MOMENT_COMFYUI_MODEL", "comfyui_model", "sd_xl_turbo_1.0.safetensors"
 )
 IMAGE_BACKEND_URL = _setting("MOMENT_IMAGE_BACKEND_URL", "image_backend_url", "http://ollama02.borgcube.com:8188")
-IMAGE_BACKEND_FALLBACK_URL = os.environ.get("MOMENT_IMAGE_BACKEND_FALLBACK_URL", str(ADDON_OPTIONS.get("image_backend_fallback_url", ""))).strip()
+IMAGE_BACKEND_FALLBACK_URL = _setting("MOMENT_IMAGE_BACKEND_FALLBACK_URL", "image_backend_fallback_url", "").strip()
 IMAGE_PROVIDER = _setting("MOMENT_IMAGE_PROVIDER", "image_provider", "openai").strip().lower()
 OPENAI_API_KEY = _setting("OPENAI_API_KEY", "openai_api_key", "").strip()
 OPENAI_IMAGE_MODEL = _setting("OPENAI_IMAGE_MODEL", "openai_image_model", "gpt-image-2")
 OPENAI_IMAGE_QUALITY = _setting("OPENAI_IMAGE_QUALITY", "openai_image_quality", "high")
-OPENAI_IMAGE_SIZE = _setting("OPENAI_IMAGE_SIZE", "openai_image_size", "1024x1024")
+_LEGACY_IMAGE_SIZE = str(ADDON_OPTIONS.get("openai_image_size", "1024x1024"))
+OPENAI_IMAGE_SIZE = os.environ.get("OPENAI_IMAGE_SIZE") or str(
+    ADDON_OPTIONS.get("image_size", _LEGACY_IMAGE_SIZE)
+)
+if OPENAI_IMAGE_SIZE not in {"1024x1024", "1536x1024", "1024x1536"}:
+    OPENAI_IMAGE_SIZE = "1024x1024"
 OPENAI_IMAGES_URL = _setting("OPENAI_IMAGES_URL", "openai_images_url", "https://api.openai.com/v1/images/generations")
-IMAGE_WIDTH = int(_setting("MOMENT_IMAGE_WIDTH", "image_width", "768"))
-IMAGE_HEIGHT = int(_setting("MOMENT_IMAGE_HEIGHT", "image_height", "768"))
+IMAGE_SIZE_DIMENSIONS = {
+    "1024x1024": (1024, 1024),
+    "1536x1024": (1536, 1024),
+    "1024x1536": (1024, 1536),
+}
+
+
+def _image_dimensions(size: str) -> tuple[int, int]:
+    """Return dimensions for a supported size, with a safe legacy fallback."""
+    if size in IMAGE_SIZE_DIMENSIONS:
+        return IMAGE_SIZE_DIMENSIONS[size]
+    try:
+        legacy_width = int(ADDON_OPTIONS.get("image_width", 1024))
+        legacy_height = int(ADDON_OPTIONS.get("image_height", 1024))
+        if legacy_width > 0 and legacy_height > 0:
+            return legacy_width, legacy_height
+    except (TypeError, ValueError):
+        pass
+    return IMAGE_SIZE_DIMENSIONS["1024x1024"]
+
+
+IMAGE_WIDTH, IMAGE_HEIGHT = _image_dimensions(OPENAI_IMAGE_SIZE)
 IMAGE_STEPS = int(_setting("MOMENT_IMAGE_STEPS", "image_steps", "9"))
 IMAGE_URL = _setting("MOMENT_IMAGE_URL", "image_url", "/local/moment-in-history/moment-in-history.png")
 SCHEDULE_TIME = _setting("MOMENT_SCHEDULE_TIME", "schedule_time", "00:05")
 GENERATE_ON_RESTART = _setting("MOMENT_GENERATE_ON_RESTART", "generate_on_restart", "false").lower() in {"1", "true", "yes", "on"}
+RUN_ON_STARTUP = _setting("MOMENT_RUN_ON_STARTUP", "run_on_startup", "false").lower() in {"1", "true", "yes", "on"}
 EMAIL_NOTIFY_ENTITY = _setting("EMAIL_NOTIFY_ENTITY", "email_notify_entity", "").strip()
 EMAIL_CAMERA_ENTITY = _setting(
     "EMAIL_CAMERA_ENTITY", "email_camera_entity", "camera.moment_in_history"
@@ -656,7 +689,8 @@ def startup_report(mode: str) -> None:
     log(f"Moment in history App {APP_VERSION} starting (mode={mode})")
     log(
         f"Runtime ready: timezone={TIME_ZONE.key}, poll_interval={POLL_INTERVAL_SECONDS}s, "
-        f"schedule_time={SCHEDULE_TIME}, generate_on_restart={GENERATE_ON_RESTART}"
+        f"schedule_time={SCHEDULE_TIME}, run_on_startup={RUN_ON_STARTUP}, "
+        f"generate_on_restart={GENERATE_ON_RESTART}"
     )
     log(
         f"Text service configured: primary={endpoint_host(OLLAMA_BASE_URL)} "
@@ -665,6 +699,7 @@ def startup_report(mode: str) -> None:
     )
     log(
         f"Image service configured: provider={IMAGE_PROVIDER}, openai_model={OPENAI_IMAGE_MODEL}, "
+        f"size={OPENAI_IMAGE_SIZE}, steps={IMAGE_STEPS}, "
         f"openai_key={'present' if OPENAI_API_KEY else 'missing'}, "
         f"lan_backend={endpoint_host(IMAGE_BACKEND_URL)}, comfyui_model={COMFYUI_MODEL}"
     )
@@ -868,7 +903,7 @@ def start_config_ui() -> Any | None:
     try:
         server = config_ui.start_server(
             port=CONFIG_UI_PORT,
-            get_options=_load_addon_options,
+            get_options=_runtime_options,
             save_options=save_model_options,
             log=log,
             get_notify_entities=get_home_assistant_notify_entities,
@@ -990,7 +1025,9 @@ def should_generate_today(
     if generated_date == today:
         return False
     if startup_pending:
-        return GENERATE_ON_RESTART
+        if GENERATE_ON_RESTART:
+            return True
+        return RUN_ON_STARTUP and schedule_reached
     return schedule_reached
 
 

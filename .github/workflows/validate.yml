@@ -30,6 +30,7 @@ jobs:
 
           for path in [
               Path("moment_in_history/config.yaml"),
+              Path("moment_in_history/translations/en.yaml"),
               Path("examples/overview-dashboard.yaml"),
               Path("examples/input_boolean.yaml"),
               Path("examples/app-options.yaml.example"),

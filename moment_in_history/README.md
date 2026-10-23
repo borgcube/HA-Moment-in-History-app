@@ -55,6 +55,8 @@ The app cannot safely create `input_boolean.disclose`, the local-file camera, or
 
 The repository README contains the full configuration, email test script, archive option, and troubleshooting details.
 
-## Image providers
+## Configure providers and models
 
-The App Configuration tab preserves the existing `openai` and `lan` choices and also accepts `comfyui`. For ComfyUI, set `image_backend_url` to the ComfyUI base URL, set `comfyui_model` to a checkpoint filename under ComfyUI's `models/checkpoints` directory, and choose dimensions/steps supported by that checkpoint. Keep a remote ComfyUI deployment on loopback behind an authenticated or source-IP-restricted HTTPS reverse proxy; do not expose its raw port.
+Open **Moment in history → Info → Open Web UI**. The page is the single place for primary and fallback Ollama URLs and text models, the OpenAI key/model/quality, the local image API or ComfyUI URLs, the local model and checkpoint, the daily schedule, and email delivery. Model lists are queried directly from Ollama `/api/tags` and OpenAI `/v1/models`; Ollama Open WebUI is not required.
+
+For ComfyUI, choose `ComfyUI`, set the backend URL, set `comfyui_model` to a checkpoint filename under ComfyUI's `models/checkpoints` directory, and use the Image size and Image steps controls in the App Configuration tab. Keep a remote ComfyUI deployment on loopback behind an authenticated or source-IP-restricted HTTPS reverse proxy; do not expose its raw port.
