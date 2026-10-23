@@ -13,6 +13,7 @@ import time
 from base64 import b64encode
 from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit, urlunsplit
@@ -56,6 +57,9 @@ DEFAULT_WEB_OPTIONS = {
 }
 URL_FIELDS = (*ENDPOINT_FIELDS, *IMAGE_ENDPOINT_FIELDS)
 MAX_REQUEST_BYTES = 16 * 1024
+SMTP_STORAGE_PATH = Path(
+    os.environ.get("HOME_ASSISTANT_SMTP_STORAGE_PATH", "/config/.storage/core.config_entries")
+)
 
 
 def _request_json(
@@ -72,7 +76,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.16",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.18",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -772,8 +776,41 @@ def _smtp_connection_input(settings: dict[str, Any], *, include_options: bool = 
     return user_input
 
 
+def _saved_smtp_data() -> dict[str, Any]:
+    """Read saved SMTP data for an internal connection test only."""
+    try:
+        payload = json.loads(SMTP_STORAGE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    entries = payload.get("data", []) if isinstance(payload, dict) else []
+    if not isinstance(entries, list):
+        return {}
+    for entry in entries:
+        if not isinstance(entry, dict) or str(entry.get("domain", "")) != "smtp":
+            continue
+        data = entry.get("data")
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _settings_for_existing_smtp_test(settings: dict[str, Any]) -> dict[str, Any]:
+    """Fill missing auth fields from Home Assistant's saved SMTP entry."""
+    if not settings.get("use_saved_credentials") or str(settings.get("password", "")):
+        return settings
+    saved = _saved_smtp_data()
+    if not saved:
+        return settings
+    result = dict(settings)
+    if not str(result.get("username", "")).strip() and saved.get("username"):
+        result["username"] = saved["username"]
+    if saved.get("password"):
+        result["password"] = saved["password"]
+    return result
+
+
 def test_smtp_connection(settings: dict[str, Any]) -> dict[str, Any]:
     """Validate and test SMTP connectivity without saving settings or sending mail."""
+    settings = _settings_for_existing_smtp_test(settings)
     user_input = _smtp_connection_input(settings, include_options=False)
     username = str(user_input.get("username", ""))
     password = str(user_input.get("password", ""))
@@ -1458,10 +1495,12 @@ def _page() -> str:
     button.disabled = true;
     smtpStatus.textContent = 'Testing SMTP connection and authentication…';
     try {
+      const settings = smtpSettings(false);
+      if (smtpForm.dataset.mode === 'update' && !settings.password) settings.use_saved_credentials = true;
       const response = await fetch(apiPath('api/smtp-test'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(smtpSettings(false))
+        body: JSON.stringify(settings)
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'SMTP connection test failed');
@@ -1803,6 +1842,8 @@ def start_server(
                             "verify_ssl",
                         )
                     }
+                    if payload.get("use_saved_credentials") is True:
+                        configuration["use_saved_credentials"] = True
                     self._json(200, test_smtp_connection(configuration))
                     return
                 if path == "/api/smtp":

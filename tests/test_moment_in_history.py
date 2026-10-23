@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.17 starting", report)
+            self.assertIn("Moment in history App 1.9.18 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -833,6 +833,46 @@ class ModelSelectionTest(unittest.TestCase):
         smtp.starttls.assert_called_once_with(context=context)
         smtp.login.assert_called_once_with("sender@example.com", "secret-password")
         smtp.quit.assert_called_once_with()
+
+    def test_smtp_connection_uses_saved_password_when_editing_existing_entry(self):
+        smtp = MagicMock()
+        context = MagicMock()
+        with tempfile.TemporaryDirectory() as directory:
+            storage_path = Path(directory) / "core.config_entries"
+            storage_path.write_text(
+                json.dumps(
+                    {
+                        "data": [
+                            {
+                                "domain": "smtp",
+                                "data": {
+                                    "username": "sender@example.com",
+                                    "password": "saved-password",
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(config_ui, "SMTP_STORAGE_PATH", storage_path), \
+                    patch.object(config_ui.smtplib, "SMTP", return_value=smtp), \
+                    patch.object(config_ui.ssl, "create_default_context", return_value=context):
+                result = config_ui.test_smtp_connection(
+                    {
+                        "sender": "sender@example.com",
+                        "server": "smtp.example.com",
+                        "port": "587",
+                        "encryption": "starttls",
+                        "username": "sender@example.com",
+                        "password": "",
+                        "use_saved_credentials": True,
+                        "verify_ssl": True,
+                    }
+                )
+
+        self.assertTrue(result["authenticated"])
+        smtp.login.assert_called_once_with("sender@example.com", "saved-password")
 
     def test_ingress_ui_exposes_smtp_setup_endpoint(self):
         settings: list[dict[str, object]] = []
