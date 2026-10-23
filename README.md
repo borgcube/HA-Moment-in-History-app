@@ -2,6 +2,8 @@
 
 Moment in History generates one historical scene every day for a Home Assistant dashboard. It selects the most consequential event from the day's **On This Day** events, describes the instant exactly ten seconds before it, and generates a dramatic high-contrast cartoon illustration. The image contains only the date; the event details are disclosed as readable plain text.
 
+This repository is a Home Assistant App repository. The root `repository.yaml` is required by Supervisor; add the repository URL itself to **Settings → Apps → Install app → ⋮ → Repositories**.
+
 The project is packaged as a Home Assistant App (formerly called an add-on). It keeps the orchestration and generated files on Home Assistant, uses Ollama for event selection and pre-event scene direction, and supports OpenAI Images or a LAN image service for the artwork.
 
 ## Features
