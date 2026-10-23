@@ -113,7 +113,7 @@ The App calls Home Assistant's `smtp.send_message` action only after the new PNG
 
 Home Assistant's SMTP integration must be able to reach and authenticate to your mail provider. Its current action sends to the selected `notify.*` entities; adding multiple recipients targets each selected recipient. See the [Home Assistant SMTP documentation](https://www.home-assistant.io/integrations/smtp/) for provider-specific settings and recipient management.
 
-The supplied [email test script](examples/moment-in-history-email.yaml) reads the existing `event.json` using Home Assistant's `file.read_file` action. If both event text and the image camera are available, it sends them; during first-time setup it sends a generic setup message without an attachment. Add the script before adding its dashboard button. The File integration requires `/config/www/moment-in-history` in `homeassistant.allowlist_external_dirs`.
+The Web UI provides **Send test email** once the SMTP recipient is selected and saved. It reads the existing `event.json` and current camera image when available, otherwise sends a generic setup message; it never generates an image. The optional [dashboard test script](examples/moment-in-history-email.yaml) remains available for users who prefer a Home Assistant dashboard button. The File integration requires `/config/www/moment-in-history` in `homeassistant.allowlist_external_dirs` when using that script.
 
 If you manage `configuration.yaml` manually, add this allowlist entry and restart Home Assistant before using the test script:
 

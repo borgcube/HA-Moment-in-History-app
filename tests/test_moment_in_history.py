@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.7 starting", report)
+            self.assertIn("Moment in history App 1.9.8 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -220,6 +220,50 @@ class EventPageRefreshTest(unittest.TestCase):
 
             payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
             self.assertEqual(payload["entity_id"], ["notify.first", "notify.second"])
+
+    def test_test_email_uses_current_content_without_generating(self):
+        metadata = {
+            "date_label": "23 October 2026",
+            "event": "Current event",
+            "pre_moment": "The room holds its breath.",
+            "source": "Test source",
+            "source_url": "https://example.invalid/event",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event_path = root / "event.json"
+            image_path = root / "moment-in-history.png"
+            event_path.write_text(json.dumps(metadata), encoding="utf-8")
+            image_path.write_bytes(b"fake png")
+            with patch.object(moment_in_history, "EVENT_JSON_PATH", event_path), \
+                    patch.object(moment_in_history, "IMAGE_PATH", image_path), \
+                    patch.object(moment_in_history, "EMAIL_NOTIFY_ENTITY", "notify.test"), \
+                    patch.object(moment_in_history, "EMAIL_CAMERA_ENTITY", "camera.moment_in_history"), \
+                    patch.object(moment_in_history, "SUPERVISOR_TOKEN", "secret-token"), \
+                    patch.object(moment_in_history, "send_event_email") as send_event_email:
+                result = moment_in_history.send_test_email()
+
+        self.assertEqual(result, {"mode": "current"})
+        send_event_email.assert_called_once_with(metadata, image_path)
+
+    def test_test_email_sends_generic_message_without_current_content(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b"[]"
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(moment_in_history, "EVENT_JSON_PATH", Path(directory) / "missing.json"), \
+                patch.object(moment_in_history, "IMAGE_PATH", Path(directory) / "missing.png"), \
+                patch.object(moment_in_history, "ROOT", Path(directory)), \
+                patch.object(moment_in_history, "LOG_PATH", Path(directory) / "generation.log"), \
+                patch.object(moment_in_history, "EMAIL_NOTIFY_ENTITY", "notify.test"), \
+                patch.object(moment_in_history, "SUPERVISOR_TOKEN", "secret-token"), \
+                patch.object(moment_in_history, "urlopen", return_value=response) as urlopen:
+            result = moment_in_history.send_test_email()
+
+        payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(result, {"mode": "generic"})
+        self.assertEqual(payload["title"], "Moment in history — SMTP test")
+        self.assertNotIn("attachments", payload)
 
     def test_generation_failure_does_not_send_email(self):
         event = moment_in_history.Event(
@@ -652,6 +696,53 @@ class ModelSelectionTest(unittest.TestCase):
         self.assertNotIn("user_input", setup_payload)
         self.assertEqual(request_json.call_args_list[3].kwargs["payload"], {"recipient": "new@example.com"})
 
+    def test_smtp_update_flow_reconfigures_existing_entry_without_options_section(self):
+        entry = {
+            "domain": "smtp",
+            "entry_id": "smtp-entry",
+            "data": {
+                "sender": "sender@example.com",
+                "server": "smtp.example.com",
+                "port": 587,
+                "encryption": "starttls",
+                "verify_ssl": True,
+            },
+        }
+        with patch.object(
+            config_ui,
+            "_request_json",
+            side_effect=[
+                [entry],
+                {"flow_id": "flow-update"},
+                {"type": "create_entry"},
+                [entry],
+            ],
+        ) as request_json:
+            updated = config_ui.update_smtp(
+                "http://supervisor/core/api",
+                "secret-token",
+                {
+                    "sender": "sender@example.com",
+                    "sender_name": "Updated sender",
+                    "server": "smtp.new.example.com",
+                    "port": "465",
+                    "encryption": "tls",
+                    "username": "sender@example.com",
+                    "password": "secret-password",
+                    "verify_ssl": True,
+                },
+            )
+
+        self.assertTrue(updated["configured"])
+        self.assertEqual(
+            request_json.call_args_list[1].kwargs["payload"],
+            {"handler": "smtp", "entry_id": "smtp-entry"},
+        )
+        update_payload = request_json.call_args_list[2].kwargs["payload"]
+        self.assertEqual(update_payload["server"], "smtp.new.example.com")
+        self.assertEqual(update_payload["password"], "secret-password")
+        self.assertNotIn("options", update_payload)
+
     def test_ingress_ui_exposes_smtp_setup_endpoint(self):
         settings: list[dict[str, object]] = []
         server = config_ui.start_server(
@@ -684,6 +775,54 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertEqual(payload["recipient"]["entity_id"], "notify.new")
             self.assertEqual(settings[0]["server"], "smtp.example.com")
             self.assertEqual(settings[0]["password"], "secret-password")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_ingress_ui_exposes_smtp_test_and_update_controls(self):
+        updated: list[dict[str, object]] = []
+        server = config_ui.start_server(
+            port=0,
+            get_options=lambda: {"primary_ollama_url": "", "fallback_ollama_url": ""},
+            save_options=lambda changes: None,
+            log=lambda message: None,
+            smtp_details=lambda: {"configured": True, "server": "smtp.example.com"},
+            update_smtp=lambda settings: (updated.append(settings) or {"configured": True}),
+            test_email=lambda: {"mode": "current"},
+        )
+        port = server.server_address[1]
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/api/smtp") as response:
+                details = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(details["configured"])
+
+            request = Request(
+                f"http://127.0.0.1:{port}/api/test-email",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request) as response:
+                self.assertEqual(json.loads(response.read().decode("utf-8")), {"mode": "current"})
+
+            request = Request(
+                f"http://127.0.0.1:{port}/api/smtp",
+                data=json.dumps(
+                    {
+                        "action": "update",
+                        "sender": "sender@example.com",
+                        "server": "smtp.new.example.com",
+                        "port": "465",
+                        "encryption": "tls",
+                        "password": "secret-password",
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request) as response:
+                self.assertTrue(json.loads(response.read().decode("utf-8"))["settings"]["configured"])
+            self.assertEqual(updated[0]["server"], "smtp.new.example.com")
         finally:
             server.shutdown()
             server.server_close()
@@ -777,6 +916,8 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('<select id="email-entity" multiple', page)
             self.assertIn('id="email-enabled"', page)
             self.assertIn('id="smtp-dialog"', page)
+            self.assertIn('id="test-email"', page)
+            self.assertIn('id="edit-smtp"', page)
             self.assertIn("Refresh now", page)
             self.assertIn("Open WebUI is not required", page)
             self.assertIn('id="primary-url-input"', page)

@@ -35,6 +35,8 @@ The app can configure SMTP for you when you enable email delivery, or you can co
 
 Alternatively, open **Moment in history → Info → Open Web UI** (the Home Assistant App configuration page), enable **Send the daily image and event by email**, and complete the popup. The popup asks for the same SMTP values and the first recipient, submits them through Home Assistant's supported SMTP config flow, and waits for the new `notify.*` entity. SMTP passwords are passed through to Home Assistant and are not stored by this app.
 
+Once SMTP is configured, the Email delivery section exposes **Edit SMTP settings** and **Send test email**. Editing uses Home Assistant's SMTP reconfigure flow, preserves existing recipients, and asks for the password again when the provider requires authentication. The test sends the current image and event when available, or a generic setup message otherwise; it never generates an image.
+
 Home Assistant creates a separate `notify.*` entity for each SMTP recipient. SMTP credentials remain owned by Home Assistant; this app only submits them to Home Assistant's supported config flow when you choose the in-app setup dialog and does not store them.
 
 ### Connect SMTP recipients to the app
