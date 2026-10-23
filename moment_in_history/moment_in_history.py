@@ -17,8 +17,10 @@ import html
 import json
 import os
 import re
+import signal
 import shutil
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -34,8 +36,9 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 POLL_INTERVAL_SECONDS = 30
+SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
     "HOME_ASSISTANT_API_URL", "http://supervisor/core/api"
 ).rstrip("/")
@@ -718,10 +721,10 @@ def remove_managed_email_recipient(email: str) -> None:
     log(f"Managed SMTP recipient removed ({record.get('entity_id') or 'entity pending'})")
 
 
-def start_config_ui() -> None:
+def start_config_ui() -> Any | None:
     """Start the Ingress-only model selection page."""
     try:
-        config_ui.start_server(
+        server = config_ui.start_server(
             port=CONFIG_UI_PORT,
             get_options=_load_addon_options,
             save_options=save_model_options,
@@ -732,8 +735,10 @@ def start_config_ui() -> None:
             remove_email_recipient=remove_managed_email_recipient,
         )
         log(f"Configuration UI: Home Assistant Ingress listening on port {CONFIG_UI_PORT}")
+        return server
     except OSError as exc:
         log(f"Configuration UI unavailable: {exc}")
+        return None
 
 
 def archive_image(target_day: date) -> None:
@@ -846,47 +851,74 @@ def should_generate_today(
     return schedule_reached
 
 
+def request_shutdown(_signum: int, _frame: Any) -> None:
+    """Request a clean daemon exit without doing blocking work in a signal handler."""
+    SHUTDOWN_EVENT.set()
+
+
 def daemon() -> int:
     """Run inside the HA add-on and keep the daily asset current."""
-    start_config_ui()
-    marker_path = ROOT / ".last-generated-date"
-    last_attempt_date: date | None = None
-    last_attempt_at = 0.0
-    startup_pending = True
-    initial_status_logged = False
-    while True:
-        now = datetime.now(TIME_ZONE)
-        today = now.date()
-        try:
-            generated_date = date.fromisoformat(marker_path.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            generated_date = None
-        schedule_reached = now.strftime("%H:%M") >= SCHEDULE_TIME
-        should_run = should_generate_today(generated_date, today, schedule_reached, startup_pending)
-        if not initial_status_logged:
-            if generated_date == today:
-                log(f"Startup state: today's image is already present ({today.isoformat()}); no generation needed")
-            elif startup_pending and not GENERATE_ON_RESTART:
-                log(
-                    f"Startup state: today's image is not present; restart generation is disabled; "
-                    f"waiting for schedule_time={SCHEDULE_TIME}"
-                )
-            elif not schedule_reached:
-                log(f"Startup state: waiting for schedule_time={SCHEDULE_TIME}; current_time={now.strftime('%H:%M')}")
-            initial_status_logged = True
-        retry_allowed = last_attempt_date != today or time.time() - last_attempt_at >= 900
-        if should_run and retry_allowed:
-            last_attempt_date = today
-            last_attempt_at = time.time()
+    SHUTDOWN_EVENT.clear()
+    previous_handlers = {
+        signal.SIGTERM: signal.getsignal(signal.SIGTERM),
+        signal.SIGINT: signal.getsignal(signal.SIGINT),
+    }
+    signal.signal(signal.SIGTERM, request_shutdown)
+    signal.signal(signal.SIGINT, request_shutdown)
+    server = start_config_ui()
+    try:
+        marker_path = ROOT / ".last-generated-date"
+        last_attempt_date: date | None = None
+        last_attempt_at = 0.0
+        startup_pending = True
+        initial_status_logged = False
+        while not SHUTDOWN_EVENT.is_set():
+            now = datetime.now(TIME_ZONE)
+            today = now.date()
             try:
-                with LOCK_PATH.open("w", encoding="utf-8") as lock_handle:
-                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-                    generate(today)
-                    marker_path.write_text(today.isoformat() + "\n", encoding="utf-8")
-            except Exception as exc:  # noqa: BLE001 - daemon logs and retries
-                log(f"Daily generation failed: {exc}")
-        startup_pending = False
-        time.sleep(POLL_INTERVAL_SECONDS)
+                generated_date = date.fromisoformat(marker_path.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                generated_date = None
+            schedule_reached = now.strftime("%H:%M") >= SCHEDULE_TIME
+            should_run = should_generate_today(generated_date, today, schedule_reached, startup_pending)
+            if not initial_status_logged:
+                if generated_date == today:
+                    log(f"Startup state: today's image is already present ({today.isoformat()}); no generation needed")
+                elif startup_pending and not GENERATE_ON_RESTART:
+                    log(
+                        f"Startup state: today's image is not present; restart generation is disabled; "
+                        f"waiting for schedule_time={SCHEDULE_TIME}"
+                    )
+                elif not schedule_reached:
+                    log(f"Startup state: waiting for schedule_time={SCHEDULE_TIME}; current_time={now.strftime('%H:%M')}")
+                initial_status_logged = True
+            retry_allowed = last_attempt_date != today or time.time() - last_attempt_at >= 900
+            if should_run and retry_allowed:
+                last_attempt_date = today
+                last_attempt_at = time.time()
+                try:
+                    with LOCK_PATH.open("w", encoding="utf-8") as lock_handle:
+                        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                        generate(today)
+                        marker_path.write_text(today.isoformat() + "\n", encoding="utf-8")
+                except Exception as exc:  # noqa: BLE001 - daemon logs and retries
+                    log(f"Daily generation failed: {exc}")
+            startup_pending = False
+            if SHUTDOWN_EVENT.wait(POLL_INTERVAL_SECONDS):
+                break
+        log("Shutdown requested; stopping cleanly")
+        return 0
+    except KeyboardInterrupt:
+        log("Shutdown requested; stopping cleanly")
+        return 0
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        SHUTDOWN_EVENT.clear()
+        log("Shutdown complete")
 
 
 if __name__ == "__main__":

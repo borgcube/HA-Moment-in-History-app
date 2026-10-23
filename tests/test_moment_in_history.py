@@ -1,8 +1,10 @@
 import contextlib
 import io
 import json
+import signal
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import date
 from pathlib import Path
@@ -43,7 +45,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.8.1 starting", report)
+            self.assertIn("Moment in history App 1.8.2 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -54,6 +56,38 @@ class EventPageRefreshTest(unittest.TestCase):
             self.assertNotIn("secret-supervisor-token", report)
             self.assertIn("Image archive: enabled", report)
             self.assertIn("Startup complete: daemon is ready", report)
+
+    def test_daemon_handles_stop_as_clean_shutdown(self):
+        class FakeServer:
+            def __init__(self):
+                self.shutdown_called = False
+                self.close_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+            def server_close(self):
+                self.close_called = True
+
+        server = FakeServer()
+        shutdown_event = threading.Event()
+
+        def start_and_request_shutdown():
+            shutdown_event.set()
+            return server
+
+        with patch.object(moment_in_history, "SHUTDOWN_EVENT", shutdown_event), \
+                patch.object(moment_in_history, "start_config_ui", side_effect=start_and_request_shutdown), \
+                patch.object(moment_in_history.signal, "signal") as signal_mock, \
+                patch.object(moment_in_history.signal, "getsignal", return_value=signal.SIG_DFL), \
+                patch.object(moment_in_history, "log") as log_mock:
+            self.assertEqual(moment_in_history.daemon(), 0)
+
+        self.assertTrue(server.shutdown_called)
+        self.assertTrue(server.close_called)
+        self.assertTrue(any("Shutdown requested; stopping cleanly" in call.args[0] for call in log_mock.call_args_list))
+        self.assertTrue(any("Shutdown complete" in call.args[0] for call in log_mock.call_args_list))
+        self.assertEqual(signal_mock.call_count, 4)
 
     def test_restart_generation_is_disabled_by_default_but_schedule_remains_active(self):
         with patch.object(moment_in_history, "GENERATE_ON_RESTART", False):
