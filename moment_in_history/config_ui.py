@@ -71,7 +71,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.10",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.11",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -1146,7 +1146,7 @@ def _page() -> str:
       ? 'Update SMTP settings'
       : 'Configure SMTP and add recipient';
     document.getElementById('smtp-recipient').required = !updating;
-    document.getElementById('smtp-recipient').closest('label').hidden = updating;
+    document.querySelector('label[for="smtp-recipient"]').hidden = updating;
     document.getElementById('smtp-recipient').hidden = updating;
     document.getElementById('smtp-password').placeholder = updating
       ? 'Enter the password again if authentication is required'

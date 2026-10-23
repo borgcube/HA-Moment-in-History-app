@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.10 starting", report)
+            self.assertIn("Moment in history App 1.9.11 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -925,6 +925,8 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="test-email"', page)
             self.assertIn('id="edit-smtp"', page)
             self.assertIn('Configure SMTP settings', page)
+            self.assertIn("label[for=\"smtp-recipient\"]", page)
+            self.assertNotIn(".closest('label')", page)
             self.assertIn("Refresh now", page)
             self.assertIn("Open WebUI is not required", page)
             self.assertIn('id="primary-url-input"', page)
