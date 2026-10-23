@@ -1,10 +1,11 @@
 name: Moment in history
-version: "1.5.0"
+version: "1.6.0"
 slug: moment_in_history
 description: Daily historical moment artwork for the Home Assistant dashboard
 startup: application
 boot: auto
 init: true
+homeassistant_api: true
 arch:
   - amd64
   - aarch64
@@ -28,14 +29,10 @@ options:
   image_width: 1024
   image_height: 1024
   image_steps: 9
-  email_recipients: ""
-  email_smtp_host: ""
-  email_smtp_port: 587
-  email_smtp_username: ""
-  email_smtp_password: ""
-  email_from: ""
-  email_smtp_use_tls: true
-  email_smtp_use_ssl: false
+  # Use the notify entity created by Home Assistant's SMTP integration.
+  email_notify_entity: ""
+  email_camera_entity: camera.moment_in_history
+  archive_images: false
   schedule_time: "00:05"
   # Retained for compatibility with older configurations; use generate_on_restart.
   run_on_startup: false
@@ -56,14 +53,9 @@ schema:
   image_width: int
   image_height: int
   image_steps: int
-  email_recipients: str
-  email_smtp_host: str
-  email_smtp_port: int
-  email_smtp_username: str
-  email_smtp_password: password
-  email_from: str
-  email_smtp_use_tls: bool
-  email_smtp_use_ssl: bool
+  email_notify_entity: str
+  email_camera_entity: str
+  archive_images: bool
   schedule_time: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
   run_on_startup: bool
   generate_on_restart: bool

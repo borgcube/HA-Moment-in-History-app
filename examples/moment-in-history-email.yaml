@@ -1,0 +1,65 @@
+# Home Assistant-side email test script.
+#
+# 1. Replace notify.moment_in_history_recipient with the notify entity created
+#    by Home Assistant's SMTP integration.
+# 2. Set the same entity ID in the App option email_notify_entity.
+# 3. Add /config/www/moment-in-history to homeassistant.allowlist_external_dirs
+#    before using file.read_file.
+# 4. Add this script to scripts.yaml or the script editor.
+
+script:
+  moment_in_history_test_email:
+    alias: Moment in history - Test email
+    description: Send the current Moment in history image and event, or a setup message if they are not ready.
+    icon: mdi:email-check-outline
+    mode: single
+    sequence:
+      - action: file.read_file
+        continue_on_error: true
+        data:
+          file_name: /config/www/moment-in-history/event.json
+          file_encoding: JSON
+        response_variable: moment_event
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ moment_event is defined
+                     and moment_event.data is defined
+                     and moment_event.data.date is defined
+                     and moment_event.data.date | string | length > 0
+                     and states('camera.moment_in_history') not in ['unknown', 'unavailable', ''] }}
+            sequence:
+              - action: smtp.send_message
+                target:
+                  entity_id: notify.moment_in_history_recipient
+                data:
+                  title: >-
+                    Moment in history test - {{ moment_event.data.date_label }}
+                  message: >-
+                    This is a test email from Moment in history.
+
+                    Event:
+                    {{ moment_event.data.event }}
+
+                    Ten seconds before:
+                    {{ moment_event.data.pre_moment }}
+
+                    Source: {{ moment_event.data.source }}
+                    {{ moment_event.data.source_url }}
+                  attachments:
+                    - media_source:
+                        media_content_id: media-source://camera/camera.moment_in_history
+                        media_content_type: image/png
+                      filename: moment-in-history.png
+        default:
+          - action: smtp.send_message
+            target:
+              entity_id: notify.moment_in_history_recipient
+            data:
+              title: Moment in history - SMTP test
+              message: >-
+                This is a test email from Moment in history. No generated image
+                and event text are available yet. Configure the App and run the
+                daily generation, then test again to send the current image and
+                event details.

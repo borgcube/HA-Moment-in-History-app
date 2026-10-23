@@ -33,6 +33,7 @@ jobs:
               Path("examples/overview-dashboard.yaml"),
               Path("examples/input_boolean.yaml"),
               Path("examples/app-options.yaml.example"),
+              Path("examples/moment-in-history-email.yaml"),
           ]:
               with path.open(encoding="utf-8") as handle:
                   yaml.safe_load(handle)

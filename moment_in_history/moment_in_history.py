@@ -17,12 +17,11 @@ import html
 import json
 import os
 import re
-import smtplib
+import shutil
 import sys
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
-from email.message import EmailMessage
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -33,8 +32,12 @@ from zoneinfo import ZoneInfo
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 POLL_INTERVAL_SECONDS = 30
+HOME_ASSISTANT_API_URL = os.environ.get(
+    "HOME_ASSISTANT_API_URL", "http://supervisor/core/api"
+).rstrip("/")
+SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "").strip()
 
 
 def _load_addon_options() -> dict[str, Any]:
@@ -85,14 +88,16 @@ IMAGE_STEPS = int(_setting("MOMENT_IMAGE_STEPS", "image_steps", "9"))
 IMAGE_URL = _setting("MOMENT_IMAGE_URL", "image_url", "/local/moment-in-history/moment-in-history.png")
 SCHEDULE_TIME = _setting("MOMENT_SCHEDULE_TIME", "schedule_time", "00:05")
 GENERATE_ON_RESTART = _setting("MOMENT_GENERATE_ON_RESTART", "generate_on_restart", "false").lower() in {"1", "true", "yes", "on"}
-EMAIL_RECIPIENTS = _setting("EMAIL_RECIPIENTS", "email_recipients", "").strip()
-EMAIL_SMTP_HOST = _setting("EMAIL_SMTP_HOST", "email_smtp_host", "").strip()
-EMAIL_SMTP_PORT = int(_setting("EMAIL_SMTP_PORT", "email_smtp_port", "587"))
-EMAIL_SMTP_USERNAME = _setting("EMAIL_SMTP_USERNAME", "email_smtp_username", "").strip()
-EMAIL_SMTP_PASSWORD = _setting("EMAIL_SMTP_PASSWORD", "email_smtp_password", "")
-EMAIL_FROM = _setting("EMAIL_FROM", "email_from", "").strip()
-EMAIL_SMTP_USE_TLS = _setting("EMAIL_SMTP_USE_TLS", "email_smtp_use_tls", "true").lower() in {"1", "true", "yes", "on"}
-EMAIL_SMTP_USE_SSL = _setting("EMAIL_SMTP_USE_SSL", "email_smtp_use_ssl", "false").lower() in {"1", "true", "yes", "on"}
+EMAIL_NOTIFY_ENTITY = _setting("EMAIL_NOTIFY_ENTITY", "email_notify_entity", "").strip()
+EMAIL_CAMERA_ENTITY = _setting(
+    "EMAIL_CAMERA_ENTITY", "email_camera_entity", "camera.moment_in_history"
+).strip()
+ARCHIVE_IMAGES = _setting("MOMENT_ARCHIVE_IMAGES", "archive_images", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 @dataclass(frozen=True)
@@ -499,16 +504,14 @@ def endpoint_host(value: str) -> str:
 def startup_report(mode: str) -> None:
     """Write an actionable, secret-free startup report for Supervisor and users."""
     ROOT.mkdir(parents=True, exist_ok=True)
-    recipients = [clean_text(value) for value in EMAIL_RECIPIENTS.split(",") if clean_text(value)]
-    if recipients:
+    if EMAIL_NOTIFY_ENTITY:
         email_status = (
-            f"enabled ({len(recipients)} recipient(s), server={endpoint_host(EMAIL_SMTP_HOST)}:"
-            f"{EMAIL_SMTP_PORT}, tls={EMAIL_SMTP_USE_TLS}, ssl={EMAIL_SMTP_USE_SSL})"
-            if EMAIL_SMTP_HOST
-            else "misconfigured (recipients set but SMTP host is empty)"
+            f"enabled via Home Assistant SMTP ({EMAIL_NOTIFY_ENTITY}, "
+            f"camera={EMAIL_CAMERA_ENTITY or 'not configured'}, "
+            f"api_token={'present' if SUPERVISOR_TOKEN else 'missing'})"
         )
     else:
-        email_status = "disabled (no recipients configured)"
+        email_status = "disabled (email_notify_entity is empty)"
 
     log(f"Moment in history App {APP_VERSION} starting (mode={mode})")
     log(
@@ -525,7 +528,12 @@ def startup_report(mode: str) -> None:
         f"openai_key={'present' if OPENAI_API_KEY else 'missing'}, "
         f"lan_backend={endpoint_host(IMAGE_BACKEND_URL)}"
     )
-    log(f"Email delivery: {email_status}")
+    log(f"Home Assistant API: {'available' if SUPERVISOR_TOKEN else 'unavailable'}")
+    log(f"Email delivery: {email_status}; only after successful image replacement")
+    if ARCHIVE_IMAGES:
+        log(f"Image archive: enabled at {ROOT / 'archive'}; budget approximately 2 MB per image")
+    else:
+        log("Image archive: disabled; enable archive_images to retain approximately 2 MB per image")
     log(
         f"Output ready: root={ROOT}, image={IMAGE_PATH.name}, metadata={EVENT_JSON_PATH.name}, "
         f"disclosure={EVENT_HTML_PATH.name}, log={LOG_PATH.name}"
@@ -536,41 +544,65 @@ def startup_report(mode: str) -> None:
 
 
 def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
-    """Send the current image and readable event text through optional SMTP."""
-    recipients = [clean_text(value) for value in EMAIL_RECIPIENTS.split(",") if clean_text(value)]
-    if not recipients:
+    """Send the current image and readable event text through Home Assistant SMTP."""
+    if not EMAIL_NOTIFY_ENTITY:
         return
-    if not EMAIL_SMTP_HOST:
-        raise RuntimeError("email_recipients is set but email_smtp_host is empty")
-    if EMAIL_SMTP_USE_SSL and EMAIL_SMTP_USE_TLS:
-        raise RuntimeError("email_smtp_use_ssl and email_smtp_use_tls cannot both be enabled")
+    if not SUPERVISOR_TOKEN:
+        raise RuntimeError("email_notify_entity is set but SUPERVISOR_TOKEN is unavailable")
+    if not EMAIL_CAMERA_ENTITY:
+        raise RuntimeError("email_camera_entity must be set to attach the generated image")
+    if not image_path.is_file():
+        raise RuntimeError(f"generated image is missing: {image_path}")
 
-    sender = EMAIL_FROM or EMAIL_SMTP_USERNAME or recipients[0]
-    message = EmailMessage()
-    message["Subject"] = f"Moment in history — {metadata['date_label']}"
-    message["From"] = sender
-    message["To"] = ", ".join(recipients)
-    message.set_content(
-        f"Moment in history — {metadata['date_label']}\n\n"
-        f"Event:\n{metadata['event']}\n\n"
-        f"Ten seconds before:\n{metadata['pre_moment']}\n\n"
-        f"Source: {metadata['source']}\n{metadata['source_url']}\n"
+    payload = {
+        "entity_id": EMAIL_NOTIFY_ENTITY,
+        "title": f"Moment in history — {metadata['date_label']}",
+        "message": (
+            f"Moment in history — {metadata['date_label']}\n\n"
+            f"Event:\n{metadata['event']}\n\n"
+            f"Ten seconds before:\n{metadata['pre_moment']}\n\n"
+            f"Source: {metadata['source']}\n{metadata['source_url']}\n"
+        ),
+        "attachments": [
+            {
+                "media_source": {
+                    "media_content_id": f"media-source://camera/{EMAIL_CAMERA_ENTITY}",
+                    "media_content_type": "image/png",
+                },
+                "filename": "moment-in-history.png",
+            }
+        ],
+    }
+    request = Request(
+        f"{HOME_ASSISTANT_API_URL}/services/smtp/send_message",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+            "Content-Type": "application/json",
+            "User-Agent": "BORGcube-MomentInHistory/1.6",
+        },
+        method="POST",
     )
-    message.add_attachment(
-        image_path.read_bytes(),
-        maintype="image",
-        subtype="png",
-        filename="moment-in-history.png",
-    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            response.read()
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:500]
+        raise RuntimeError(f"Home Assistant SMTP action failed ({exc.code}): {detail}") from exc
+    log(f"Email sent via Home Assistant SMTP ({EMAIL_NOTIFY_ENTITY})")
 
-    smtp_class = smtplib.SMTP_SSL if EMAIL_SMTP_USE_SSL else smtplib.SMTP
-    with smtp_class(EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, timeout=60) as server:
-        if EMAIL_SMTP_USE_TLS and not EMAIL_SMTP_USE_SSL:
-            server.starttls()
-        if EMAIL_SMTP_USERNAME:
-            server.login(EMAIL_SMTP_USERNAME, EMAIL_SMTP_PASSWORD)
-        server.send_message(message)
-    log(f"Email sent to {len(recipients)} recipient(s)")
+
+def archive_image(target_day: date) -> None:
+    """Keep an optional dated copy without affecting the current dashboard image."""
+    if not ARCHIVE_IMAGES:
+        return
+    archive_path = ROOT / "archive" / f"{target_day.year:04d}" / f"{target_day.month:02d}" / f"{target_day.isoformat()}.png"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = archive_path.with_suffix(".tmp.png")
+    shutil.copy2(IMAGE_PATH, temporary_path)
+    os.replace(temporary_path, archive_path)
+    size_mib = archive_path.stat().st_size / (1024 * 1024)
+    log(f"Archived {target_day.isoformat()} image to {archive_path} ({size_mib:.2f} MiB)")
 
 
 def generate(target_day: date) -> None:
@@ -628,6 +660,7 @@ def generate(target_day: date) -> None:
         "prompt": prompt,
     }
     write_event_pages(metadata)
+    archive_image(target_day)
     try:
         send_event_email(metadata, IMAGE_PATH)
     except Exception as exc:  # noqa: BLE001 - email must not stop daily generation

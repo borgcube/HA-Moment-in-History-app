@@ -78,15 +78,11 @@ image_width: 1024
 image_height: 1024
 image_steps: 9
 
-# Optional SMTP delivery. Leave email_recipients empty to disable email.
-email_recipients: "you@example.com, second@example.com"
-email_smtp_host: smtp.example.com
-email_smtp_port: 587
-email_smtp_username: "you@example.com"
-email_smtp_password: "set this only in the App Configuration tab"
-email_from: "you@example.com"
-email_smtp_use_tls: true
-email_smtp_use_ssl: false
+# Optional Home Assistant SMTP delivery. Use the notify entity created by the
+# Home Assistant SMTP integration; leave email_notify_entity empty to disable.
+email_notify_entity: notify.moment_in_history_recipient
+email_camera_entity: camera.moment_in_history
+archive_images: false
 
 schedule_time: "00:05"
 generate_on_restart: false
@@ -102,7 +98,23 @@ The OpenAI path automatically tries the configured LAN image backend if the Open
 
 ### Optional email delivery
 
-Set `email_recipients` to a comma-separated list to send each newly generated image by email. The message contains the event title, the readable “ten seconds before” text, the source link, and `moment-in-history.png` as an attachment. Email is sent directly through the configured SMTP server; STARTTLS on port 587 is the default. For implicit TLS on port 465, set `email_smtp_use_tls: false` and `email_smtp_use_ssl: true`. If delivery fails, the app records the error in `generation.log` and keeps the image generation successful.
+Configure Home Assistant's built-in **SMTP** integration under **Settings → Devices & services → Add integration → SMTP**. Add one or more recipients there; Home Assistant creates a `notify.*` entity for each recipient. Put the desired entity ID in `email_notify_entity`, for example `notify.moment_in_history_recipient`. The App no longer stores SMTP hostnames, usernames, passwords, TLS settings, or recipient lists.
+
+The App calls Home Assistant's `smtp.send_message` action only after the new PNG has been written and atomically moved into place. The message contains the event, “ten seconds before” text, source link, and the current dashboard image through `email_camera_entity`. If generation fails, no email is attempted. If email delivery fails after successful generation, the error is logged without discarding the generated image.
+
+The supplied [email test script](examples/moment-in-history-email.yaml) reads the existing `event.json` using Home Assistant's `file.read_file` action. If both event text and the image camera are available, it sends them; during first-time setup it sends a generic setup message without an attachment. Add the script before adding its dashboard button. The File integration requires `/config/www/moment-in-history` in `homeassistant.allowlist_external_dirs`.
+
+If you manage `configuration.yaml` manually, add this allowlist entry and restart Home Assistant before using the test script:
+
+```yaml
+homeassistant:
+  allowlist_external_dirs:
+    - /config/www/moment-in-history
+```
+
+### Optional image archive
+
+Set `archive_images: true` to keep dated copies under `/config/www/moment-in-history/archive/YYYY/MM/`. Archiving is disabled by default so updates do not consume extra storage unexpectedly. A generated PNG is typically about **2 MB**, so archiving costs approximately 2 MB per day, or about 60 MB per 30-day month. The App logs the actual size of every archived image.
 
 ### Restart and update behavior
 
@@ -189,6 +201,7 @@ The app writes these files under `/config/www/moment-in-history/`:
 | `event.json` | Current structured event metadata |
 | `event.html` | Plain-text disclosure page |
 | `generation.log` | Daily generation log |
+| `archive/YYYY/MM/YYYY-MM-DD.png` | Optional dated image archive |
 
 ## Schedule and source fallback
 

@@ -2,6 +2,7 @@
 # Required entities:
 #   camera.moment_in_history
 #   input_boolean.disclose
+#   script.moment_in_history_test_email (from moment-in-history-email.yaml)
 type: vertical-stack
 cards:
   - type: heading
@@ -21,6 +22,12 @@ cards:
     name: Disclose
     icon: mdi:book-open-variant
     features_position: bottom
+  - type: button
+    name: Test email
+    icon: mdi:email-check-outline
+    tap_action:
+      action: perform-action
+      perform_action: script.moment_in_history_test_email
   - type: conditional
     conditions:
       - entity: input_boolean.disclose
