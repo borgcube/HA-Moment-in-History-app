@@ -58,9 +58,9 @@ The App includes a Home Assistant **Ingress** configuration page. Open the App's
 - the fallback Ollama endpoint's `/api/tags` response; and
 - OpenAI's `/v1/models` endpoint, filtered to image-capable model IDs, when an OpenAI API key is configured.
 
-Choose the primary text model, fallback text model, OpenAI image model, and one or more notification entities from the resulting dropdowns and select **Save selections**. The App saves the values through Home Assistant Supervisor and restarts so the new choices become active. The API key is used only inside the App and is never sent to the browser or written to the model-discovery response.
+Enter or edit the primary and fallback Ollama API URLs in this page. Choose the primary text model, fallback text model, OpenAI image model, and one or more notification entities from the resulting dropdowns, then select **Save selections**. The App saves the endpoint and model values through Home Assistant Supervisor and restarts so the new choices become active. The API key is used only inside the App and is never sent to the browser or written to the model-discovery response.
 
-The ordinary App **Configuration** tab remains the source for endpoint URLs and the OpenAI API key. The model text fields remain in the schema for compatibility with existing installations, but the Ingress page is the recommended way to choose valid model IDs without typing them.
+The ordinary App **Configuration** tab remains the source for the OpenAI API key and remains compatible with existing installations. The Ingress page is the recommended way to enter endpoint URLs and choose valid model IDs without typing them.
 
 ### Automatic updates from GitHub
 

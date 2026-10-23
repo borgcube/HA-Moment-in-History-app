@@ -14,13 +14,14 @@ from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 
 OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
 MODEL_FIELDS = ("text_model", "fallback_text_model", "openai_image_model")
-SELECTABLE_FIELDS = MODEL_FIELDS + ("email_notify_entity",)
+ENDPOINT_FIELDS = ("primary_ollama_url", "fallback_ollama_url")
+SELECTABLE_FIELDS = ENDPOINT_FIELDS + MODEL_FIELDS + ("email_notify_entity",)
 MAX_REQUEST_BYTES = 16 * 1024
 
 
@@ -38,7 +39,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.8.5",
+            "User-Agent": "BORGcube-MomentInHistory/1.8.8",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -96,7 +97,9 @@ def _is_text_model(item: dict[str, Any]) -> bool:
     name = str(item.get("name", "")).casefold()
     details = item.get("details") or {}
     family = str(details.get("family", "")).casefold() if isinstance(details, dict) else ""
-    families = details.get("families", []) if isinstance(details, dict) else []
+    families = details.get("families") if isinstance(details, dict) else []
+    if not isinstance(families, (list, tuple)):
+        families = []
     family_names = " ".join(str(value).casefold() for value in families if value)
     return not (
         "embed" in name
@@ -619,14 +622,16 @@ def _page() -> str:
 <body>
 <main>
   <h1>Moment in history — model selection</h1>
-  <p>This is Home Assistant’s configuration page, not Ollama Open WebUI. Model discovery uses the provider APIs directly: Ollama <code>/api/tags</code> and OpenAI <code>/v1/models</code>. Lists are queried automatically when this page opens and when it returns to the foreground. Use Refresh now to retry immediately. Saving a selection updates the App options through Home Assistant and restarts the App.</p>
+  <p>This is Home Assistant’s configuration page, not Ollama Open WebUI. Model discovery uses the provider APIs directly: Ollama <code>/api/tags</code> and OpenAI <code>/v1/models</code>. Enter or edit the Ollama API URLs below; model lists query those values automatically. Saving a selection updates the App options through Home Assistant and restarts the App.</p>
 
   <section>
     <h2>Ollama</h2>
-    <div class="url" id="primary-url"></div>
+    <label for="primary-url-input">Primary Ollama API URL</label>
+    <input id="primary-url-input" type="url" inputmode="url" placeholder="http://ollama01.example.local:11434">
     <label for="primary-model">Primary Ollama model</label>
     <select id="primary-model"></select>
-    <div class="url" id="fallback-url"></div>
+    <label for="fallback-url-input">Fallback Ollama API URL</label>
+    <input id="fallback-url-input" type="url" inputmode="url" placeholder="http://ollama02.example.local:11434">
     <label for="fallback-model">Fallback Ollama model</label>
     <select id="fallback-model"></select>
   </section>
@@ -729,8 +734,8 @@ def _page() -> str:
   function render(data) {
     const config = data.config || {};
     const models = data.models || {};
-    document.getElementById('primary-url').textContent = 'Endpoint: ' + (config.primary_ollama_url || 'not configured');
-    document.getElementById('fallback-url').textContent = 'Endpoint: ' + (config.fallback_ollama_url || 'not configured');
+    document.getElementById('primary-url-input').value = config.primary_ollama_url || '';
+    document.getElementById('fallback-url-input').value = config.fallback_ollama_url || '';
     fill(fields[0], config.text_model, models.primary_ollama || [], false);
     fill(fields[1], config.fallback_text_model, models.fallback_ollama || [], false);
     fill(fields[2], config.openai_image_model, models.openai_image || [], !config.openai_key_present);
@@ -772,13 +777,22 @@ def _page() -> str:
     });
   }
   let refreshInFlight = null;
+  function discoveryUrl() {
+    const query = new URLSearchParams();
+    [['primary_ollama_url', 'primary-url-input'], ['fallback_ollama_url', 'fallback-url-input']].forEach(function (pair) {
+      const value = document.getElementById(pair[1]).value.trim();
+      if (value) query.set(pair[0], value);
+    });
+    const suffix = query.toString();
+    return apiPath('api/models') + (suffix ? '?' + suffix : '');
+  }
   async function refresh(options) {
     const silent = Boolean(options && options.silent);
     if (refreshInFlight) return refreshInFlight;
     refreshInFlight = (async function () {
       if (!silent) status.textContent = 'Querying configured endpoints…';
       try {
-        const response = await fetch(apiPath('api/models'), { cache: 'no-store' });
+        const response = await fetch(discoveryUrl(), { cache: 'no-store' });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'model discovery failed');
         render(data);
@@ -863,6 +877,8 @@ def _page() -> str:
   async function save() {
     status.textContent = 'Saving model selection…';
     const values = {};
+    values.primary_ollama_url = document.getElementById('primary-url-input').value.trim();
+    values.fallback_ollama_url = document.getElementById('fallback-url-input').value.trim();
     fields.forEach(function (field) {
       const select = document.getElementById(field.id);
       values[field.config] = field.multiple
@@ -885,6 +901,13 @@ def _page() -> str:
   }
   document.getElementById('refresh').addEventListener('click', refresh);
   document.getElementById('save').addEventListener('click', save);
+  ['primary-url-input', 'fallback-url-input'].forEach(function (id) {
+    let timer = null;
+    document.getElementById(id).addEventListener('input', function () {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(function () { refresh({ silent: true }); }, 500);
+    });
+  });
   document.getElementById('add-email').addEventListener('click', addEmail);
   emailEnabled.addEventListener('change', async function () {
     if (!emailEnabled.checked) {
@@ -1015,7 +1038,12 @@ def start_server(
                 return
             if path == "/api/models":
                 try:
-                    result = discover_models(get_options())
+                    options = dict(get_options())
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    for field in ENDPOINT_FIELDS:
+                        if field in query:
+                            options[field] = query[field][0].strip()
+                    result = discover_models(options)
                     result["email"] = {
                         "notify_entities": [],
                         "managed_recipients": [],
@@ -1101,12 +1129,18 @@ def start_server(
                     field: str(payload[field]).strip()
                     for field in SELECTABLE_FIELDS
                     if field in payload
-                    and (str(payload[field]).strip() or field == 'email_notify_entity')
+                    and (str(payload[field]).strip() or field in ENDPOINT_FIELDS or field == 'email_notify_entity')
                 }
                 if not changes:
                     raise ValueError("no model selection was supplied")
                 if any(len(value) > 256 or any(ord(char) < 32 for char in value) for value in changes.values()):
                     raise ValueError("invalid model selection")
+                for field in ENDPOINT_FIELDS:
+                    if field not in changes or not changes[field]:
+                        continue
+                    parsed = urlsplit(changes[field])
+                    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+                        raise ValueError(f"{field} must be an HTTP(S) URL without embedded credentials")
                 save_options(changes)
             except ValueError as exc:
                 self._json(400, {"error": str(exc)})

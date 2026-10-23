@@ -45,7 +45,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.8.7 starting", report)
+            self.assertIn("Moment in history App 1.8.8 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -349,6 +349,14 @@ class ModelSelectionTest(unittest.TestCase):
                 ["gemma4:e4b", "qwen3.8:27b-mlx"],
             )
 
+    def test_ollama_models_handles_null_families(self):
+        with patch.object(
+            config_ui,
+            "_request_json",
+            return_value={"models": [{"name": "qwen3.8:27b-mlx", "details": {"families": None}}]},
+        ):
+            self.assertEqual(config_ui.ollama_models("http://ollama01.example:11434"), ["qwen3.8:27b-mlx"])
+
     def test_openai_image_models_are_filtered(self):
         with patch.object(
             config_ui,
@@ -376,6 +384,32 @@ class ModelSelectionTest(unittest.TestCase):
         self.assertNotIn("secret-key", serialized)
         self.assertTrue(result["config"]["openai_key_present"])
         self.assertEqual(result["models"]["openai_image"], ["gpt-image-2"])
+
+    def test_ingress_model_discovery_uses_entered_ollama_urls(self):
+        server = config_ui.start_server(
+            port=0,
+            get_options=lambda: {"primary_ollama_url": "", "fallback_ollama_url": ""},
+            save_options=lambda changes: None,
+            log=lambda message: None,
+        )
+        port = server.server_address[1]
+        primary = "http://entered-primary.example:11434"
+        fallback = "http://entered-fallback.example:11434"
+        try:
+            with patch.object(config_ui, "ollama_models", side_effect=[["primary-model"], ["fallback-model"]]) as discover:
+                with urlopen(
+                    f"http://127.0.0.1:{port}/api/models?primary_ollama_url={primary}&fallback_ollama_url={fallback}"
+                ) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(discover.call_args_list[0].args, (primary,))
+            self.assertEqual(discover.call_args_list[1].args, (fallback,))
+            self.assertEqual(result["models"]["primary_ollama"], ["primary-model"])
+            self.assertEqual(result["models"]["fallback_ollama"], ["fallback-model"])
+            self.assertEqual(result["config"]["primary_ollama_url"], primary)
+            self.assertEqual(result["config"]["fallback_ollama_url"], fallback)
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_home_assistant_notify_entities_are_discovered(self):
         with patch.object(
@@ -596,6 +630,8 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="smtp-dialog"', page)
             self.assertIn("Refresh now", page)
             self.assertIn("not Ollama Open WebUI", page)
+            self.assertIn('id="primary-url-input"', page)
+            self.assertIn('id="fallback-url-input"', page)
             self.assertIn("/api/tags", page)
             self.assertIn("/v1/models", page)
             self.assertIn("document.addEventListener('visibilitychange'", page)
@@ -613,6 +649,8 @@ class ModelSelectionTest(unittest.TestCase):
                         "fallback_text_model": "new-fallback",
                         "openai_image_model": "gpt-image-2",
                         "email_notify_entity": "notify.email_recipient",
+                        "primary_ollama_url": "http://ollama01.example:11434",
+                        "fallback_ollama_url": "http://ollama02.example:11434",
                     }
                 ).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
@@ -624,6 +662,8 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertEqual(
                 saved,
                 [{
+                    "primary_ollama_url": "http://ollama01.example:11434",
+                    "fallback_ollama_url": "http://ollama02.example:11434",
                     "text_model": "new-primary",
                     "fallback_text_model": "new-fallback",
                     "openai_image_model": "gpt-image-2",
