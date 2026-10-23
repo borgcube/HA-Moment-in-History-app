@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.14 starting", report)
+            self.assertIn("Moment in history App 1.9.15 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -244,7 +244,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 result = moment_in_history.send_test_email()
 
         self.assertEqual(result, {"mode": "current"})
-        send_event_email.assert_called_once_with(metadata, image_path)
+        send_event_email.assert_called_once_with(metadata, image_path, ["notify.test"])
 
     def test_test_email_sends_generic_message_without_current_content(self):
         response = MagicMock()
@@ -264,6 +264,23 @@ class EventPageRefreshTest(unittest.TestCase):
         self.assertEqual(result, {"mode": "generic"})
         self.assertEqual(payload["title"], "Moment in history — SMTP test")
         self.assertNotIn("attachments", payload)
+
+    def test_test_email_can_use_unsaved_notify_targets(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b"[]"
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(moment_in_history, "EVENT_JSON_PATH", Path(directory) / "missing.json"), \
+                patch.object(moment_in_history, "IMAGE_PATH", Path(directory) / "missing.png"), \
+                patch.object(moment_in_history, "ROOT", Path(directory)), \
+                patch.object(moment_in_history, "LOG_PATH", Path(directory) / "generation.log"), \
+                patch.object(moment_in_history, "SUPERVISOR_TOKEN", "secret-token"), \
+                patch.object(moment_in_history, "urlopen", return_value=response) as urlopen:
+            result = moment_in_history.send_test_email(["notify.unsaved_target"])
+
+        payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(result, {"mode": "generic"})
+        self.assertEqual(payload["entity_id"], "notify.unsaved_target")
 
     def test_safe_error_preserves_actionable_local_errors(self):
         self.assertEqual(
@@ -814,7 +831,8 @@ class ModelSelectionTest(unittest.TestCase):
 
     def test_ingress_ui_exposes_smtp_test_and_update_controls(self):
         updated: list[dict[str, object]] = []
-        tested: list[dict[str, object]] = []
+        test_email_targets: list[list[str] | None] = []
+        smtp_tested: list[dict[str, object]] = []
         server = config_ui.start_server(
             port=0,
             get_options=lambda: {"primary_ollama_url": "", "fallback_ollama_url": ""},
@@ -822,9 +840,9 @@ class ModelSelectionTest(unittest.TestCase):
             log=lambda message: None,
             smtp_details=lambda: {"configured": True, "server": "smtp.example.com"},
             update_smtp=lambda settings: (updated.append(settings) or {"configured": True}),
-            test_email=lambda: {"mode": "current"},
+            test_email=lambda targets=None: (test_email_targets.append(targets) or {"mode": "current"}),
             test_smtp_connection=lambda settings: (
-                tested.append(settings) or {"ok": True, "authenticated": True}
+                smtp_tested.append(settings) or {"ok": True, "authenticated": True}
             ),
         )
         port = server.server_address[1]
@@ -841,6 +859,16 @@ class ModelSelectionTest(unittest.TestCase):
             )
             with urlopen(request) as response:
                 self.assertEqual(json.loads(response.read().decode("utf-8")), {"mode": "current"})
+
+            request = Request(
+                f"http://127.0.0.1:{port}/api/test-email",
+                data=json.dumps({"entity_ids": ["notify.one", "notify.two"]}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request) as response:
+                self.assertEqual(json.loads(response.read().decode("utf-8")), {"mode": "current"})
+            self.assertEqual(test_email_targets, [None, ["notify.one", "notify.two"]])
 
             request = Request(
                 f"http://127.0.0.1:{port}/api/smtp-test",
@@ -863,8 +891,8 @@ class ModelSelectionTest(unittest.TestCase):
                     json.loads(response.read().decode("utf-8")),
                     {"ok": True, "authenticated": True},
                 )
-            self.assertEqual(tested[0]["server"], "smtp.example.com")
-            self.assertNotIn("recipient", tested[0])
+            self.assertEqual(smtp_tested[0]["server"], "smtp.example.com")
+            self.assertNotIn("recipient", smtp_tested[0])
 
             request = Request(
                 f"http://127.0.0.1:{port}/api/smtp",
@@ -981,6 +1009,9 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="edit-smtp"', page)
             self.assertIn('id="smtp-test-connection"', page)
             self.assertIn("Test connection", page)
+            self.assertIn('id="test-email-dialog"', page)
+            self.assertIn('id="test-email-entities"', page)
+            self.assertIn("Choose where this one test email should go", page)
             self.assertIn('Configure SMTP settings', page)
             self.assertIn("label[for=\"smtp-recipient\"]", page)
             self.assertNotIn(".closest('label')", page)

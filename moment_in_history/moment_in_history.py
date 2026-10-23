@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.14"
+APP_VERSION = "1.9.15"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.14",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.15",
         },
     )
     try:
@@ -813,7 +813,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.14",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.15",
         },
         method="POST",
     )
@@ -825,9 +825,11 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         raise RuntimeError(f"Home Assistant SMTP action failed ({exc.code}): {detail}") from exc
 
 
-def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
+def send_event_email(
+    metadata: dict[str, Any], image_path: Path, notify_entities: list[str] | None = None
+) -> None:
     """Send the current image and readable event text through Home Assistant SMTP."""
-    notify_entities = configured_notify_entities()
+    notify_entities = notify_entities if notify_entities is not None else configured_notify_entities()
     if not notify_entities:
         return
     if not EMAIL_CAMERA_ENTITY:
@@ -856,14 +858,19 @@ def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
             ],
         }
     )
-    log(f"Email sent via Home Assistant SMTP ({EMAIL_NOTIFY_ENTITY})")
+    log(f"Email sent via Home Assistant SMTP ({', '.join(notify_entities)})")
 
 
-def send_test_email() -> dict[str, str]:
+def send_test_email(notify_entities: list[str] | None = None) -> dict[str, str]:
     """Send a current-content or generic SMTP test without generating an image."""
-    notify_entities = configured_notify_entities()
+    if notify_entities is None:
+        notify_entities = configured_notify_entities()
+    else:
+        notify_entities = [str(value).strip() for value in notify_entities if str(value).strip()]
+        if any(not value.startswith("notify.") for value in notify_entities):
+            raise ValueError("Test email targets must be Home Assistant notify.* entities")
     if not notify_entities:
-        raise RuntimeError("Select and save at least one notify.* email recipient first")
+        raise RuntimeError("Choose at least one notify.* test recipient")
     if not SUPERVISOR_TOKEN:
         raise RuntimeError("Home Assistant API token is unavailable")
 
@@ -875,7 +882,7 @@ def send_test_email() -> dict[str, str]:
                 str(loaded.get(field, "")).strip()
                 for field in ("date_label", "event", "pre_moment", "source", "source_url")
             ) and EMAIL_CAMERA_ENTITY:
-                send_event_email(loaded, IMAGE_PATH)
+                send_event_email(loaded, IMAGE_PATH, notify_entities)
                 return {"mode": "current"}
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
@@ -891,7 +898,7 @@ def send_test_email() -> dict[str, str]:
             ),
         }
     )
-    log(f"Generic SMTP test email sent ({EMAIL_NOTIFY_ENTITY})")
+    log(f"Generic SMTP test email sent ({', '.join(notify_entities)})")
     return {"mode": "generic"}
 
 
@@ -912,7 +919,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.14",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.15",
         },
         method="POST",
     )

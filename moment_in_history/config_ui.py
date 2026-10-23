@@ -72,7 +72,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.14",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.15",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -1040,6 +1040,21 @@ def _page() -> str:
     </menu>
   </form>
 </dialog>
+<dialog id="test-email-dialog" aria-labelledby="test-email-dialog-title">
+  <form id="test-email-form">
+    <h2 id="test-email-dialog-title">Send test email</h2>
+    <p class="hint">Choose where this one test email should go. This does not change the saved daily delivery recipients.</p>
+    <label for="test-email-entities">Existing Home Assistant notify entities</label>
+    <select id="test-email-entities" multiple size="5"></select>
+    <label for="test-email-recipient">Or add an SMTP email address for this test</label>
+    <input id="test-email-recipient" type="email" autocomplete="email" placeholder="name@example.com">
+    <div class="status" id="test-email-status" role="status"></div>
+    <menu>
+      <button id="test-email-cancel" class="secondary" type="button">Cancel</button>
+      <button id="test-email-send" type="submit">Send test email</button>
+    </menu>
+  </form>
+</dialog>
 <script>
 (function () {
   const fields = [
@@ -1055,6 +1070,11 @@ def _page() -> str:
   const smtpDialog = document.getElementById('smtp-dialog');
   const smtpForm = document.getElementById('smtp-form');
   const smtpStatus = document.getElementById('smtp-status');
+  const testEmailDialog = document.getElementById('test-email-dialog');
+  const testEmailForm = document.getElementById('test-email-form');
+  const testEmailEntities = document.getElementById('test-email-entities');
+  const testEmailRecipient = document.getElementById('test-email-recipient');
+  const testEmailStatus = document.getElementById('test-email-status');
   const dirtyFields = new Set();
   let emailEnableRequested = false;
   function apiPath(path) {
@@ -1077,6 +1097,19 @@ def _page() -> str:
       select.add(new Option(field.allowEmpty ? 'Email delivery disabled' : 'No models discovered', ''));
     }
     select.disabled = disabled;
+  }
+  function renderTestEmailEntities() {
+    const selected = new Set(Array.from(emailEntity.selectedOptions).map(function (option) { return option.value; }).filter(Boolean));
+    testEmailEntities.replaceChildren();
+    Array.from(emailEntity.options).forEach(function (option) {
+      if (!option.value) return;
+      testEmailEntities.add(new Option(option.textContent, option.value, false, selected.has(option.value)));
+    });
+    if (!testEmailEntities.options.length) {
+      const option = new Option('No notify entities discovered — add an SMTP address below', '');
+      option.disabled = true;
+      testEmailEntities.add(option);
+    }
   }
   function setValue(id, value) {
     if (dirtyFields.has(id)) return;
@@ -1113,6 +1146,7 @@ def _page() -> str:
     smtpButton.textContent = email.smtp_configured === true ? 'Edit SMTP settings' : 'Configure SMTP settings';
     fill({ id: 'email-entity', multiple: true, allowEmpty: true, label: 'Saved value' }, config.email_notify_entity, email.notify_entities || [], false);
     emailSelect.setAttribute('aria-label', 'Existing Home Assistant notify entities');
+    renderTestEmailEntities();
     if (!emailEnableRequested && !dirtyFields.has('email-enabled')) emailEnabled.checked = Boolean(config.email_notify_entity);
     const managed = email.managed_recipients || [];
     const pills = document.getElementById('managed-recipients');
@@ -1279,10 +1313,23 @@ def _page() -> str:
       smtpStatus.textContent = 'Unable to load SMTP settings: ' + error.message;
     }
   }
+  function showTestEmailDialog() {
+    renderTestEmailEntities();
+    testEmailRecipient.value = '';
+    testEmailStatus.textContent = testEmailEntities.options.length && !testEmailEntities.options[0].disabled
+      ? 'Select one or more recipients, or enter a new SMTP email address below.'
+      : 'No existing notify entity is available. Enter an SMTP email address below.';
+    if (typeof testEmailDialog.showModal === 'function') testEmailDialog.showModal();
+    else testEmailDialog.setAttribute('open', 'open');
+  }
+  function closeTestEmailDialog() {
+    if (typeof testEmailDialog.close === 'function') testEmailDialog.close();
+    else testEmailDialog.removeAttribute('open');
+  }
   async function testEmail() {
     const button = document.getElementById('test-email');
     button.disabled = true;
-    status.textContent = 'Sending SMTP test email…';
+    status.textContent = 'Checking SMTP configuration…';
     try {
       const smtpResponse = await fetch(apiPath('api/smtp'), { cache: 'no-store' });
       const smtp = await smtpResponse.json();
@@ -1292,22 +1339,46 @@ def _page() -> str:
         await editSmtp();
         return;
       }
-      if (!Array.from(emailEntity.selectedOptions).some(function (option) { return option.value; })) {
-        status.textContent = 'Select at least one email recipient and save configuration first.';
-        return;
+      showTestEmailDialog();
+    } catch (error) {
+      status.textContent = 'Unable to prepare test email: ' + error.message;
+    } finally {
+      button.disabled = false;
+    }
+  }
+  async function sendTestEmail(event) {
+    event.preventDefault();
+    const button = document.getElementById('test-email-send');
+    button.disabled = true;
+    testEmailStatus.textContent = 'Preparing test email…';
+    try {
+      const targets = Array.from(testEmailEntities.selectedOptions)
+        .map(function (option) { return option.value; })
+        .filter(Boolean);
+      const recipient = testEmailRecipient.value.trim();
+      if (recipient) {
+        testEmailStatus.textContent = 'Adding the SMTP recipient in Home Assistant…';
+        const result = await manageEmail('add', recipient);
+        const entityId = result.recipient && result.recipient.entity_id;
+        if (!entityId) throw new Error('Home Assistant did not make a notify entity available for that address');
+        targets.push(entityId);
       }
+      if (!targets.length) throw new Error('Choose at least one notify entity or enter an SMTP email address');
+      testEmailStatus.textContent = 'Sending SMTP test email…';
       const response = await fetch(apiPath('api/test-email'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}'
+        body: JSON.stringify({ entity_ids: Array.from(new Set(targets)) })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'test email failed');
+      closeTestEmailDialog();
+      await refresh({ silent: true });
       status.textContent = data.mode === 'current'
-        ? 'Test email sent with the current image and event.'
-        : 'Generic SMTP test email sent.';
+        ? 'Test email sent with the current image and event. Daily delivery settings were not changed.'
+        : 'Generic SMTP test email sent. Daily delivery settings were not changed.';
     } catch (error) {
-      status.textContent = 'Unable to send test email: ' + error.message;
+      testEmailStatus.textContent = 'Unable to send test email: ' + error.message;
     } finally {
       button.disabled = false;
     }
@@ -1414,6 +1485,8 @@ def _page() -> str:
   document.getElementById('save').addEventListener('click', save);
   document.getElementById('edit-smtp').addEventListener('click', editSmtp);
   document.getElementById('test-email').addEventListener('click', testEmail);
+  testEmailForm.addEventListener('submit', sendTestEmail);
+  document.getElementById('test-email-cancel').addEventListener('click', closeTestEmailDialog);
   document.getElementById('smtp-test-connection').addEventListener('click', testSmtpConnection);
   ['primary-url-input', 'fallback-url-input', 'image-provider', 'openai-quality', 'openai-key',
     'clear-openai-key', 'openai-model', 'image-model', 'image-backend-url',
@@ -1527,7 +1600,7 @@ def start_server(
     configure_smtp: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     smtp_details: Callable[[], dict[str, Any]] | None = None,
     update_smtp: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    test_email: Callable[[], dict[str, Any]] | None = None,
+    test_email: Callable[..., dict[str, Any]] | None = None,
     test_smtp_connection: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> ThreadingHTTPServer:
     """Start the authenticated-by-Ingress configuration server."""
@@ -1630,7 +1703,18 @@ def start_server(
                 if path == "/api/test-email":
                     if not test_email:
                         raise ValueError("SMTP test email is unavailable")
-                    result = test_email()
+                    target_entities = payload.get("entity_ids")
+                    if target_entities is None:
+                        result = test_email()
+                    else:
+                        if not isinstance(target_entities, list) or not target_entities:
+                            raise ValueError("Choose at least one notify.* test recipient")
+                        entities = [str(value).strip() for value in target_entities]
+                        if any(not value.startswith("notify.") for value in entities if value):
+                            raise ValueError("Test email targets must be Home Assistant notify.* entities")
+                        if any(not value for value in entities):
+                            raise ValueError("Choose at least one notify.* test recipient")
+                        result = test_email(entities)
                     self._json(200, result if isinstance(result, dict) else {"mode": "generic"})
                     return
                 if path == "/api/smtp-test":
