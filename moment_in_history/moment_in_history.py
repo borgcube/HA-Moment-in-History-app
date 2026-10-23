@@ -80,7 +80,7 @@ IMAGE_HEIGHT = int(_setting("MOMENT_IMAGE_HEIGHT", "image_height", "768"))
 IMAGE_STEPS = int(_setting("MOMENT_IMAGE_STEPS", "image_steps", "9"))
 IMAGE_URL = _setting("MOMENT_IMAGE_URL", "image_url", "/local/moment-in-history/moment-in-history.png")
 SCHEDULE_TIME = _setting("MOMENT_SCHEDULE_TIME", "schedule_time", "00:05")
-RUN_ON_STARTUP = _setting("MOMENT_RUN_ON_STARTUP", "run_on_startup", "true").lower() in {"1", "true", "yes", "on"}
+GENERATE_ON_RESTART = _setting("MOMENT_GENERATE_ON_RESTART", "generate_on_restart", "false").lower() in {"1", "true", "yes", "on"}
 EMAIL_RECIPIENTS = _setting("EMAIL_RECIPIENTS", "email_recipients", "").strip()
 EMAIL_SMTP_HOST = _setting("EMAIL_SMTP_HOST", "email_smtp_host", "").strip()
 EMAIL_SMTP_PORT = int(_setting("EMAIL_SMTP_PORT", "email_smtp_port", "587"))
@@ -600,11 +600,26 @@ def main() -> int:
     return 0
 
 
+def should_generate_today(
+    generated_date: date | None,
+    today: date,
+    schedule_reached: bool,
+    startup_pending: bool,
+) -> bool:
+    """Decide whether this loop may generate without changing stored config."""
+    if generated_date == today:
+        return False
+    if startup_pending:
+        return GENERATE_ON_RESTART
+    return schedule_reached
+
+
 def daemon() -> int:
     """Run inside the HA add-on and keep the daily asset current."""
     marker_path = ROOT / ".last-generated-date"
     last_attempt_date: date | None = None
     last_attempt_at = 0.0
+    startup_pending = True
     while True:
         now = datetime.now(TIME_ZONE)
         today = now.date()
@@ -613,7 +628,7 @@ def daemon() -> int:
         except (OSError, ValueError):
             generated_date = None
         schedule_reached = now.strftime("%H:%M") >= SCHEDULE_TIME
-        should_run = generated_date != today and (RUN_ON_STARTUP or schedule_reached)
+        should_run = should_generate_today(generated_date, today, schedule_reached, startup_pending)
         retry_allowed = last_attempt_date != today or time.time() - last_attempt_at >= 900
         if should_run and retry_allowed:
             last_attempt_date = today
@@ -625,6 +640,7 @@ def daemon() -> int:
                     marker_path.write_text(today.isoformat() + "\n", encoding="utf-8")
             except Exception as exc:  # noqa: BLE001 - daemon logs and retries
                 log(f"Daily generation failed: {exc}")
+        startup_pending = False
         time.sleep(30)
 
 

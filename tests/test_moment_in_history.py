@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +12,27 @@ import moment_in_history  # noqa: E402
 
 
 class EventPageRefreshTest(unittest.TestCase):
+    def test_restart_generation_is_disabled_by_default_but_schedule_remains_active(self):
+        with patch.object(moment_in_history, "GENERATE_ON_RESTART", False):
+            self.assertFalse(
+                moment_in_history.should_generate_today(
+                    None, date(2026, 10, 23), True, startup_pending=True
+                )
+            )
+            self.assertTrue(
+                moment_in_history.should_generate_today(
+                    None, date(2026, 10, 23), True, startup_pending=False
+                )
+            )
+
+    def test_restart_generation_can_be_enabled_explicitly(self):
+        with patch.object(moment_in_history, "GENERATE_ON_RESTART", True):
+            self.assertTrue(
+                moment_in_history.should_generate_today(
+                    None, date(2026, 10, 23), True, startup_pending=True
+                )
+            )
+
     def test_event_page_refreshes_metadata_without_replacing_server_fallback(self):
         metadata = {
             "date": "2026-10-23",

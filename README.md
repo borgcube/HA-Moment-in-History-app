@@ -83,7 +83,7 @@ email_smtp_use_tls: true
 email_smtp_use_ssl: false
 
 schedule_time: "00:05"
-run_on_startup: true
+generate_on_restart: false
 ```
 
 ### Image providers
@@ -97,6 +97,10 @@ The OpenAI path automatically tries the configured LAN image backend if the Open
 ### Optional email delivery
 
 Set `email_recipients` to a comma-separated list to send each newly generated image by email. The message contains the event title, the readable “ten seconds before” text, the source link, and `moment-in-history.png` as an attachment. Email is sent directly through the configured SMTP server; STARTTLS on port 587 is the default. For implicit TLS on port 465, set `email_smtp_use_tls: false` and `email_smtp_use_ssl: true`. If delivery fails, the app records the error in `generation.log` and keeps the image generation successful.
+
+### Restart and update behavior
+
+`generate_on_restart` defaults to `false`. An App update or restart keeps the Supervisor configuration and the generated files under `/config/www/moment-in-history/`; it does not request a new image. The normal daily schedule remains active. Set `generate_on_restart: true` only when you intentionally want the App to generate immediately when its daemon starts. The older `run_on_startup` option remains in the schema for compatibility with existing installations, but it no longer controls generation.
 
 Never commit an API key to this repository, a dashboard YAML file, or a public issue.
 
@@ -178,7 +182,7 @@ The app writes these files under `/config/www/moment-in-history/`:
 
 ## Schedule and source fallback
 
-The app runs once on startup when `run_on_startup` is enabled, then checks every 30 seconds and generates after `schedule_time` if today's generation has not completed. Britannica is attempted first. If it returns an anti-bot page, an HTTP error, or no parseable event list, the Wikimedia On This Day feed is used.
+The app checks every 30 seconds and generates after `schedule_time` if today's generation has not completed. With `generate_on_restart` disabled, a restart before or after the scheduled time does not create an extra image; the next scheduled run handles the next daily generation. Britannica is attempted first. If it returns an anti-bot page, an HTTP error, or no parseable event list, the Wikimedia On This Day feed is used.
 
 ## Troubleshooting
 

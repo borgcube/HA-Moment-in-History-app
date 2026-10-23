@@ -24,4 +24,4 @@ email_from: "you@example.com"
 email_smtp_use_tls: true
 email_smtp_use_ssl: false
 schedule_time: "00:05"
-run_on_startup: true
+generate_on_restart: false
