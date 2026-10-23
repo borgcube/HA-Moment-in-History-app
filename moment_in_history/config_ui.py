@@ -76,7 +76,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.18",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.22",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -1529,8 +1529,8 @@ def _page() -> str:
       closeTestEmailDialog();
       await refresh({ silent: true });
       status.textContent = data.mode === 'current'
-        ? 'Test email accepted by Home Assistant SMTP with the current image and event. Provider delivery is not confirmed. Daily delivery settings were not changed.'
-        : 'Generic test email accepted by Home Assistant SMTP. Provider delivery is not confirmed. Daily delivery settings were not changed.';
+        ? 'SMTP server accepted the test email via Home Assistant with the current image and event. Inbox delivery is not confirmed. Daily delivery settings were not changed.'
+        : 'SMTP server accepted the generic test email via Home Assistant. Inbox delivery is not confirmed. Daily delivery settings were not changed.';
     } catch (error) {
       testEmailStatus.textContent = 'Unable to send test email: ' + error.message;
     } finally {

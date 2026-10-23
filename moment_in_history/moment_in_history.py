@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.21"
+APP_VERSION = "1.9.22"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.21",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.22",
         },
     )
     try:
@@ -858,7 +858,7 @@ def send_event_email(
             ],
         }
     )
-    log(f"Email accepted by Home Assistant SMTP ({', '.join(notify_entities)})")
+    log(f"SMTP server accepted email via Home Assistant ({', '.join(notify_entities)})")
 
 
 def send_test_email(notify_entities: list[str] | None = None) -> dict[str, str]:
@@ -898,7 +898,7 @@ def send_test_email(notify_entities: list[str] | None = None) -> dict[str, str]:
             ),
         }
     )
-    log(f"Generic SMTP test email accepted by Home Assistant SMTP ({', '.join(notify_entities)})")
+    log(f"SMTP server accepted generic test email via Home Assistant ({', '.join(notify_entities)})")
     return {"mode": "generic"}
 
 
@@ -919,7 +919,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.21",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.22",
         },
         method="POST",
     )

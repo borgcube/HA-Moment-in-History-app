@@ -1,7 +1,7 @@
 FROM python:3.13-slim-bookworm
 
 LABEL \
-  io.hass.version="1.9.21" \
+  io.hass.version="1.9.22" \
   io.hass.type="app" \
   io.hass.arch="amd64"
 
