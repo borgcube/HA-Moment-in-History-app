@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.11"
+APP_VERSION = "1.9.12"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.11",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.12",
         },
     )
     try:
@@ -813,7 +813,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.11",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.12",
         },
         method="POST",
     )
@@ -912,7 +912,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.11",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.12",
         },
         method="POST",
     )
@@ -1051,6 +1051,11 @@ def update_smtp_integration(settings: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def test_smtp_connection(settings: dict[str, Any]) -> dict[str, Any]:
+    """Test SMTP settings entered in the Web UI without saving them."""
+    return config_ui.test_smtp_connection(settings)
+
+
 def remove_managed_email_recipient(email: str) -> None:
     """Remove an App-managed SMTP recipient through Home Assistant's API."""
     normalized = email.strip()
@@ -1079,6 +1084,7 @@ def start_config_ui() -> Any | None:
             smtp_details=get_smtp_details,
             update_smtp=update_smtp_integration,
             test_email=send_test_email,
+            test_smtp_connection=test_smtp_connection,
         )
         log(f"Configuration UI: Home Assistant Ingress listening on port {CONFIG_UI_PORT}")
         return server

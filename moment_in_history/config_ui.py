@@ -6,6 +6,7 @@ import json
 import os
 import re
 import socket
+import smtplib
 import ssl
 import struct
 import time
@@ -71,7 +72,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.11",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.12",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -692,6 +693,62 @@ def _smtp_connection_input(settings: dict[str, Any], *, include_options: bool = 
     return user_input
 
 
+def test_smtp_connection(settings: dict[str, Any]) -> dict[str, Any]:
+    """Validate and test SMTP connectivity without saving settings or sending mail."""
+    user_input = _smtp_connection_input(settings, include_options=False)
+    username = str(user_input.get("username", ""))
+    password = str(user_input.get("password", ""))
+    if bool(username) != bool(password):
+        raise ValueError("Enter both the SMTP username and password, or leave both blank")
+
+    verify_ssl = bool(user_input.get("verify_ssl", True))
+    context = ssl.create_default_context()
+    if not verify_ssl:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+    server: smtplib.SMTP | smtplib.SMTP_SSL | None = None
+    try:
+        if user_input["encryption"] == "tls":
+            server = smtplib.SMTP_SSL(
+                str(user_input["server"]),
+                int(user_input["port"]),
+                timeout=15,
+                context=context,
+            )
+        else:
+            server = smtplib.SMTP(
+                str(user_input["server"]),
+                int(user_input["port"]),
+                timeout=15,
+            )
+            server.ehlo()
+            if user_input["encryption"] == "starttls":
+                server.starttls(context=context)
+                server.ehlo()
+        authenticated = False
+        if username and password:
+            server.login(username, password)
+            authenticated = True
+        return {
+            "ok": True,
+            "authenticated": authenticated,
+            "server": str(user_input["server"]),
+            "port": int(user_input["port"]),
+        }
+    except smtplib.SMTPAuthenticationError as exc:
+        raise RuntimeError("SMTP authentication failed") from exc
+    except (OSError, smtplib.SMTPException) as exc:
+        detail = str(exc).strip()
+        raise RuntimeError(f"SMTP connection failed: {detail[:200]}" if detail else "SMTP connection failed") from exc
+    finally:
+        if server is not None:
+            try:
+                server.quit()
+            except (OSError, smtplib.SMTPException):
+                server.close()
+
+
 def configure_smtp(api_url: str, token: str, settings: dict[str, Any]) -> dict[str, Any]:
     """Create Home Assistant's SMTP integration and its first recipient through config flows."""
     recipient = str(settings.get("recipient", "")).strip()
@@ -968,6 +1025,7 @@ def _page() -> str:
     <input id="smtp-recipient" type="email" autocomplete="email" required placeholder="recipient@example.com">
     <div class="status" id="smtp-status" role="status"></div>
     <menu>
+      <button id="smtp-test-connection" class="secondary" type="button">Test connection</button>
       <button id="smtp-cancel" class="secondary" type="button">Cancel</button>
       <button id="smtp-submit" type="submit">Configure SMTP and add recipient</button>
     </menu>
@@ -1136,6 +1194,20 @@ def _page() -> str:
     if (!response.ok) throw new Error(data.error || 'SMTP setup failed');
     return data;
   }
+  function smtpSettings(includeRecipient) {
+    const settings = {
+      sender: document.getElementById('smtp-sender').value.trim(),
+      sender_name: document.getElementById('smtp-sender-name').value.trim(),
+      server: document.getElementById('smtp-server').value.trim(),
+      port: document.getElementById('smtp-port').value,
+      encryption: document.getElementById('smtp-encryption').value,
+      username: document.getElementById('smtp-username').value.trim(),
+      password: document.getElementById('smtp-password').value,
+      verify_ssl: document.getElementById('smtp-verify-ssl').checked
+    };
+    if (includeRecipient) settings.recipient = document.getElementById('smtp-recipient').value.trim();
+    return settings;
+  }
   function setSmtpDialogMode(mode) {
     const updating = mode === 'update';
     smtpForm.dataset.mode = mode;
@@ -1231,6 +1303,27 @@ def _page() -> str:
       button.disabled = false;
     }
   }
+  async function testSmtpConnection() {
+    const button = document.getElementById('smtp-test-connection');
+    button.disabled = true;
+    smtpStatus.textContent = 'Testing SMTP connection and authentication…';
+    try {
+      const response = await fetch(apiPath('api/smtp-test'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(smtpSettings(false))
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'SMTP connection test failed');
+      smtpStatus.textContent = data.authenticated
+        ? 'SMTP connection and authentication succeeded. Nothing was saved or sent.'
+        : 'SMTP connection succeeded. No authentication was attempted; nothing was saved or sent.';
+    } catch (error) {
+      smtpStatus.textContent = 'SMTP connection test failed: ' + error.message;
+    } finally {
+      button.disabled = false;
+    }
+  }
   function closeSmtpDialog() {
     if (typeof smtpDialog.close === 'function') smtpDialog.close();
     else smtpDialog.removeAttribute('open');
@@ -1312,6 +1405,7 @@ def _page() -> str:
   document.getElementById('save').addEventListener('click', save);
   document.getElementById('edit-smtp').addEventListener('click', editSmtp);
   document.getElementById('test-email').addEventListener('click', testEmail);
+  document.getElementById('smtp-test-connection').addEventListener('click', testSmtpConnection);
   ['primary-url-input', 'fallback-url-input', 'image-provider', 'openai-quality', 'openai-key',
     'clear-openai-key', 'openai-model', 'image-model', 'image-backend-url',
     'image-backend-fallback-url', 'comfyui-model', 'schedule-time', 'email-enabled',
@@ -1360,17 +1454,7 @@ def _page() -> str:
     event.preventDefault();
     const updating = smtpForm.dataset.mode === 'update';
     smtpStatus.textContent = updating ? 'Updating Home Assistant SMTP…' : 'Configuring Home Assistant SMTP…';
-    const settings = {
-      sender: document.getElementById('smtp-sender').value.trim(),
-      sender_name: document.getElementById('smtp-sender-name').value.trim(),
-      server: document.getElementById('smtp-server').value.trim(),
-      port: document.getElementById('smtp-port').value,
-      encryption: document.getElementById('smtp-encryption').value,
-      username: document.getElementById('smtp-username').value.trim(),
-      password: document.getElementById('smtp-password').value,
-      verify_ssl: document.getElementById('smtp-verify-ssl').checked,
-      recipient: document.getElementById('smtp-recipient').value.trim()
-    };
+    const settings = smtpSettings(!updating);
     if (updating) {
       settings.action = 'update';
       delete settings.recipient;
@@ -1435,6 +1519,7 @@ def start_server(
     smtp_details: Callable[[], dict[str, Any]] | None = None,
     update_smtp: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     test_email: Callable[[], dict[str, Any]] | None = None,
+    test_smtp_connection: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> ThreadingHTTPServer:
     """Start the authenticated-by-Ingress configuration server."""
 
@@ -1523,7 +1608,7 @@ def start_server(
                 self._json(403, {"error": "Ingress access required"})
                 return
             path = urlsplit(self.path).path
-            if path not in {"/api/config", "/api/email-recipient", "/api/smtp", "/api/test-email"}:
+            if path not in {"/api/config", "/api/email-recipient", "/api/smtp", "/api/smtp-test", "/api/test-email"}:
                 self._not_found()
                 return
             try:
@@ -1538,6 +1623,24 @@ def start_server(
                         raise ValueError("SMTP test email is unavailable")
                     result = test_email()
                     self._json(200, result if isinstance(result, dict) else {"mode": "generic"})
+                    return
+                if path == "/api/smtp-test":
+                    if not test_smtp_connection:
+                        raise ValueError("SMTP connection test is unavailable")
+                    configuration = {
+                        key: payload.get(key)
+                        for key in (
+                            "sender",
+                            "sender_name",
+                            "server",
+                            "port",
+                            "encryption",
+                            "username",
+                            "password",
+                            "verify_ssl",
+                        )
+                    }
+                    self._json(200, test_smtp_connection(configuration))
                     return
                 if path == "/api/smtp":
                     configuration = {
@@ -1612,7 +1715,7 @@ def start_server(
             except Exception as exc:  # noqa: BLE001 - do not expose Supervisor details
                 safe_error = _safe_error(exc)
                 log(f"Configuration UI save failed: {safe_error}")
-                if path in {"/api/smtp", "/api/email-recipient", "/api/test-email"}:
+                if path in {"/api/smtp", "/api/email-recipient", "/api/smtp-test", "/api/test-email"}:
                     self._json(502, {"error": safe_error})
                 else:
                     self._json(502, {"error": "Home Assistant rejected the configuration update"})

@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.11 starting", report)
+            self.assertIn("Moment in history App 1.9.12 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -749,6 +749,33 @@ class ModelSelectionTest(unittest.TestCase):
         self.assertEqual(update_payload["password"], "secret-password")
         self.assertNotIn("options", update_payload)
 
+    def test_smtp_connection_checks_starttls_and_auth_without_sending(self):
+        smtp = MagicMock()
+        context = MagicMock()
+        with patch.object(config_ui.smtplib, "SMTP", return_value=smtp) as smtp_factory, \
+                patch.object(config_ui.ssl, "create_default_context", return_value=context):
+            result = config_ui.test_smtp_connection(
+                {
+                    "sender": "sender@example.com",
+                    "server": "smtp.example.com",
+                    "port": "587",
+                    "encryption": "starttls",
+                    "username": "sender@example.com",
+                    "password": "secret-password",
+                    "verify_ssl": True,
+                }
+            )
+
+        self.assertEqual(
+            result,
+            {"ok": True, "authenticated": True, "server": "smtp.example.com", "port": 587},
+        )
+        smtp_factory.assert_called_once_with("smtp.example.com", 587, timeout=15)
+        self.assertEqual(smtp.ehlo.call_count, 2)
+        smtp.starttls.assert_called_once_with(context=context)
+        smtp.login.assert_called_once_with("sender@example.com", "secret-password")
+        smtp.quit.assert_called_once_with()
+
     def test_ingress_ui_exposes_smtp_setup_endpoint(self):
         settings: list[dict[str, object]] = []
         server = config_ui.start_server(
@@ -787,6 +814,7 @@ class ModelSelectionTest(unittest.TestCase):
 
     def test_ingress_ui_exposes_smtp_test_and_update_controls(self):
         updated: list[dict[str, object]] = []
+        tested: list[dict[str, object]] = []
         server = config_ui.start_server(
             port=0,
             get_options=lambda: {"primary_ollama_url": "", "fallback_ollama_url": ""},
@@ -795,6 +823,9 @@ class ModelSelectionTest(unittest.TestCase):
             smtp_details=lambda: {"configured": True, "server": "smtp.example.com"},
             update_smtp=lambda settings: (updated.append(settings) or {"configured": True}),
             test_email=lambda: {"mode": "current"},
+            test_smtp_connection=lambda settings: (
+                tested.append(settings) or {"ok": True, "authenticated": True}
+            ),
         )
         port = server.server_address[1]
         try:
@@ -810,6 +841,30 @@ class ModelSelectionTest(unittest.TestCase):
             )
             with urlopen(request) as response:
                 self.assertEqual(json.loads(response.read().decode("utf-8")), {"mode": "current"})
+
+            request = Request(
+                f"http://127.0.0.1:{port}/api/smtp-test",
+                data=json.dumps(
+                    {
+                        "sender": "sender@example.com",
+                        "server": "smtp.example.com",
+                        "port": "587",
+                        "encryption": "starttls",
+                        "username": "sender@example.com",
+                        "password": "secret-password",
+                        "recipient": "must-not-be-forwarded@example.com",
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request) as response:
+                self.assertEqual(
+                    json.loads(response.read().decode("utf-8")),
+                    {"ok": True, "authenticated": True},
+                )
+            self.assertEqual(tested[0]["server"], "smtp.example.com")
+            self.assertNotIn("recipient", tested[0])
 
             request = Request(
                 f"http://127.0.0.1:{port}/api/smtp",
@@ -924,6 +979,8 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="smtp-dialog"', page)
             self.assertIn('id="test-email"', page)
             self.assertIn('id="edit-smtp"', page)
+            self.assertIn('id="smtp-test-connection"', page)
+            self.assertIn("Test connection", page)
             self.assertIn('Configure SMTP settings', page)
             self.assertIn("label[for=\"smtp-recipient\"]", page)
             self.assertNotIn(".closest('label')", page)
