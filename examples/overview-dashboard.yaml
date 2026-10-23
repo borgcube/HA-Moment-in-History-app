@@ -1,0 +1,30 @@
+# Paste this into an Overview dashboard Manual card.
+# Required entities:
+#   camera.moment_in_history
+#   input_boolean.disclose
+type: vertical-stack
+cards:
+  - type: heading
+    heading: Moment in history
+    icon: mdi:history
+  - type: picture-entity
+    entity: camera.moment_in_history
+    name: ""
+    show_name: false
+    show_state: false
+    show_entity_picture: false
+    tap_action:
+      action: url
+      url_path: /local/moment-in-history/event.html?v=2
+  - type: tile
+    entity: input_boolean.disclose
+    name: Disclose
+    icon: mdi:book-open-variant
+    features_position: bottom
+  - type: conditional
+    conditions:
+      - entity: input_boolean.disclose
+        state: "on"
+    card:
+      type: iframe
+      url: /local/moment-in-history/event.html?v=2

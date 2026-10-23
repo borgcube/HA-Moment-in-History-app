@@ -1,0 +1,22 @@
+# Secrets and local configuration
+.env
+.env.*
+*.secret
+
+# Python and generated runtime files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.generation.lock
+generation.log
+event.json
+event.html
+event-details.png
+moment-in-history.png
+*.png
+
+# Local Home Assistant and editor files
+.storage/
+.venv/
+.idea/
+.vscode/

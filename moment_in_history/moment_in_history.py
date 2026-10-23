@@ -1,0 +1,635 @@
+#!/usr/bin/env python3
+"""Generate the daily "Moment in history" image and publish its metadata.
+
+The script deliberately tries Britannica first.  Some network paths receive a
+Cloudflare challenge instead of the page, so a public, machine-readable
+Wikimedia On This Day feed is used as a documented fallback.  Event selection
+and the image prompt are kept separate so the generated image is always the
+moment immediately before the selected event, rather than the event itself.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import fcntl
+import html
+import json
+import os
+import re
+import time
+import textwrap
+from dataclasses import dataclass
+from datetime import date, datetime
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
+
+
+TIME_ZONE = ZoneInfo("Europe/Amsterdam")
+
+
+def _load_addon_options() -> dict[str, Any]:
+    """Load Home Assistant add-on options when running inside an add-on."""
+    options_path = Path("/data/options.json")
+    if not options_path.exists():
+        return {}
+    try:
+        value = json.loads(options_path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+ADDON_OPTIONS = _load_addon_options()
+
+
+def _setting(env_name: str, option_name: str, default: str) -> str:
+    return os.environ.get(env_name) or str(ADDON_OPTIONS.get(option_name, default))
+
+
+ROOT = Path(_setting("MOMENT_ROOT", "root", "/config/www/moment-in-history"))
+IMAGE_PATH = ROOT / "moment-in-history.png"
+EVENT_JSON_PATH = ROOT / "event.json"
+EVENT_HTML_PATH = ROOT / "event.html"
+EVENT_DETAILS_IMAGE_PATH = ROOT / "event-details.png"
+LOCK_PATH = ROOT / ".generation.lock"
+LOG_PATH = ROOT / "generation.log"
+
+BRITANNICA_URL = "https://www.britannica.com/on-this-day"
+WIKIMEDIA_URL = "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/{month:02d}/{day:02d}"
+
+OLLAMA_BASE_URL = _setting("OLLAMA_BASE_URL", "primary_ollama_url", "http://openclaw.borgcube.com:11434")
+OLLAMA_FALLBACK_URL = _setting("OLLAMA_FALLBACK_URL", "fallback_ollama_url", "http://storage01.borgcube.com:11434")
+TEXT_MODEL = _setting("MOMENT_TEXT_MODEL", "text_model", "qwen3.8:27b-mlx")
+FALLBACK_TEXT_MODEL = _setting("MOMENT_FALLBACK_TEXT_MODEL", "fallback_text_model", "gemma4:e4b")
+IMAGE_MODEL = _setting("MOMENT_IMAGE_MODEL", "image_model", "Tongyi-MAI/Z-Image-Turbo")
+IMAGE_BACKEND_URL = _setting("MOMENT_IMAGE_BACKEND_URL", "image_backend_url", "http://storage01.borgcube.com:8188")
+IMAGE_BACKEND_FALLBACK_URL = os.environ.get("MOMENT_IMAGE_BACKEND_FALLBACK_URL", str(ADDON_OPTIONS.get("image_backend_fallback_url", ""))).strip()
+IMAGE_PROVIDER = _setting("MOMENT_IMAGE_PROVIDER", "image_provider", "openai").strip().lower()
+OPENAI_API_KEY = _setting("OPENAI_API_KEY", "openai_api_key", "").strip()
+OPENAI_IMAGE_MODEL = _setting("OPENAI_IMAGE_MODEL", "openai_image_model", "gpt-image-2")
+OPENAI_IMAGE_QUALITY = _setting("OPENAI_IMAGE_QUALITY", "openai_image_quality", "high")
+OPENAI_IMAGE_SIZE = _setting("OPENAI_IMAGE_SIZE", "openai_image_size", "1024x1024")
+OPENAI_IMAGES_URL = _setting("OPENAI_IMAGES_URL", "openai_images_url", "https://api.openai.com/v1/images/generations")
+IMAGE_WIDTH = int(_setting("MOMENT_IMAGE_WIDTH", "image_width", "768"))
+IMAGE_HEIGHT = int(_setting("MOMENT_IMAGE_HEIGHT", "image_height", "768"))
+IMAGE_STEPS = int(_setting("MOMENT_IMAGE_STEPS", "image_steps", "9"))
+IMAGE_URL = _setting("MOMENT_IMAGE_URL", "image_url", "/local/moment-in-history/moment-in-history.png")
+SCHEDULE_TIME = _setting("MOMENT_SCHEDULE_TIME", "schedule_time", "00:05")
+RUN_ON_STARTUP = _setting("MOMENT_RUN_ON_STARTUP", "run_on_startup", "true").lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass(frozen=True)
+class Event:
+    year: int | None
+    title: str
+    text: str
+    source: str
+    source_url: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "year": self.year,
+            "title": self.title,
+            "text": self.text,
+            "source": self.source,
+            "source_url": self.source_url,
+        }
+
+
+class VisibleTextParser(HTMLParser):
+    """Collect readable blocks without depending on third-party packages."""
+
+    BLOCK_TAGS = {"p", "li", "h1", "h2", "h3", "h4", "article"}
+    SKIP_TAGS = {"script", "style", "noscript", "svg", "nav", "header", "footer"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._block_depth = 0
+        self._buffer: list[str] = []
+        self.blocks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in self.SKIP_TAGS:
+            self._skip_depth += 1
+        if tag in self.BLOCK_TAGS and not self._skip_depth:
+            self._block_depth += 1
+            if self._block_depth == 1:
+                self._buffer = []
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in self.BLOCK_TAGS and self._block_depth and not self._skip_depth:
+            self._block_depth -= 1
+            if self._block_depth == 0:
+                value = clean_text(" ".join(self._buffer))
+                if value:
+                    self.blocks.append(value)
+        if tag in self.SKIP_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth and self._block_depth:
+            self._buffer.append(data)
+
+
+def clean_text(value: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(value)).strip()
+
+
+def fetch_bytes(url: str, *, timeout: int = 30) -> bytes:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "BORGcube-MomentInHistory/1.0 (+https://openclaw.borgcube.com)",
+            "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        },
+    )
+    with urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def fetch_json(url: str) -> dict[str, Any]:
+    return json.loads(fetch_bytes(url).decode("utf-8"))
+
+
+def parse_year(text: str) -> int | None:
+    match = re.search(r"(?<!\d)(\d{1,4})(?:\s*(?:BCE|BC|CE|AD))?(?!\d)", text, re.I)
+    return int(match.group(1)) if match else None
+
+
+def fetch_britannica_events(day: date) -> list[Event]:
+    """Best-effort extraction from Britannica's current On This Day page."""
+    raw = fetch_bytes(BRITANNICA_URL).decode("utf-8", "replace")
+    lowered = raw.lower()
+    if "just a moment" in lowered or "cf_chl_opt" in lowered or len(raw) < 20_000:
+        raise RuntimeError("Britannica returned a bot-challenge page")
+
+    parser = VisibleTextParser()
+    parser.feed(raw)
+    blocks = parser.blocks
+    events: list[Event] = []
+    seen: set[str] = set()
+    event_section = False
+    for block in blocks:
+        marker = block.lower()
+        if marker in {"events", "historical events", "on this day"}:
+            event_section = True
+            continue
+        if marker in {"births", "deaths", "holidays", "related"}:
+            event_section = False
+        if not event_section or len(block) < 35:
+            continue
+        if not re.search(r"\b\d{2,4}\b", block):
+            continue
+        normalized = block[:700]
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        events.append(Event(parse_year(normalized), normalized, normalized, "Britannica", BRITANNICA_URL))
+    if not events:
+        raise RuntimeError("Britannica page contained no parseable event blocks")
+    return events
+
+
+def fetch_wikimedia_events(day: date) -> list[Event]:
+    payload = fetch_json(WIKIMEDIA_URL.format(month=day.month, day=day.day))
+    events: list[Event] = []
+    for item in payload.get("events", []):
+        text = clean_text(str(item.get("text", "")))
+        if not text:
+            continue
+        pages = item.get("pages") or []
+        first_page = pages[0] if pages else {}
+        titles = first_page.get("titles") or {}
+        urls = first_page.get("content_urls") or {}
+        desktop = urls.get("desktop") or {}
+        title = clean_text(str(titles.get("normalized") or text))
+        events.append(
+            Event(
+                year=item.get("year"),
+                title=title,
+                text=text,
+                source="Wikimedia On This Day (fallback)",
+                source_url=desktop.get("page") or WIKIMEDIA_URL.format(month=day.month, day=day.day),
+            )
+        )
+    if not events:
+        raise RuntimeError("Wikimedia returned no events")
+    return events
+
+
+def choose_event(events: list[Event]) -> tuple[Event, str]:
+    """Use local Ollama to rank all candidates, with a deterministic fallback."""
+    numbered = "\n".join(f"{i}: {event.year or '?'} — {event.text}" for i, event in enumerate(events))
+    prompt = f"""You are selecting one event for a daily historical illustration.
+Choose the single most impactful event from the complete list below. Prefer events
+with broad, lasting consequences or unusually vivid historical stakes. Do not choose
+a birth, death, holiday, or trivial detail. Return JSON only with this exact shape:
+{{"index": 0, "why": "one concise sentence"}}
+
+Complete candidate list:
+{numbered}
+"""
+    try:
+        payload = {
+            "model": TEXT_MODEL,
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0.1},
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        response = json.loads(post_json_with_fallback("/api/chat", payload))
+        content = response.get("message", {}).get("content", "")
+        decision = json.loads(content)
+        index = int(decision.get("index", 0))
+        if 0 <= index < len(events):
+            return events[index], clean_text(str(decision.get("why", "Selected by local Ollama.")))
+    except Exception as exc:  # noqa: BLE001 - deterministic fallback is intentional
+        log(f"Ollama event ranking failed: {exc}")
+
+    weights = {
+        "war": 8,
+        "revolution": 8,
+        "crisis": 8,
+        "president": 6,
+        "invasion": 8,
+        "disaster": 7,
+        "first": 5,
+        "invention": 5,
+        "discovery": 5,
+        "independence": 7,
+        "treaty": 6,
+        "launch": 4,
+        "speech": 4,
+    }
+    scored = [(sum(weight for word, weight in weights.items() if word in event.text.lower()), i, event) for i, event in enumerate(events)]
+    _, _, winner = max(scored, key=lambda item: (item[0], len(item[2].text)))
+    return winner, "Selected by the local deterministic fallback ranking."
+
+
+def post_json(url: str, payload: dict[str, Any], *, timeout: int = 900) -> str:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "BORGcube-MomentInHistory/1.0"},
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8")
+
+
+def post_json_with_fallback(path: str, payload: dict[str, Any], *, timeout: int = 900) -> str:
+    last_error: Exception | None = None
+    endpoints = [OLLAMA_BASE_URL]
+    if OLLAMA_FALLBACK_URL not in endpoints:
+        endpoints.append(OLLAMA_FALLBACK_URL)
+    for endpoint in endpoints:
+        try:
+            endpoint_payload = dict(payload)
+            if endpoint == OLLAMA_FALLBACK_URL and endpoint_payload.get("model") == TEXT_MODEL:
+                endpoint_payload["model"] = FALLBACK_TEXT_MODEL
+            return post_json(f"{endpoint.rstrip('/')}{path}", endpoint_payload, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - try the configured fallback
+            last_error = exc
+            log(f"Ollama endpoint unavailable ({endpoint}): {exc}")
+    raise RuntimeError(f"All Ollama endpoints failed for {path}: {last_error}")
+
+
+def build_image_prompt(pre_moment: str, day: date) -> str:
+    return f"""Use case: historical-scene.
+Asset type: daily Home Assistant dashboard artwork.
+Primary request: a wordless cinematic cartoon illustration of the exact moment ten seconds before a major historical event. Show only the tense anticipation and immediate setup, never the event itself or its aftermath.
+Scene direction (visual meaning only; never render these words): {pre_moment}
+Style/medium: clearly 2D cartoon illustration, clean ink outlines, cel shading, simplified stylized forms, dramatic high-contrast modern graphic-novel finish, epic composition, strong silhouette design, dynamic perspective, polished concept art. Avoid photorealism and photographic textures.
+Lighting/mood: bold directional lighting, deep shadows, luminous highlights, suspenseful anticipation.
+Composition/framing: square 1024x1024 composition, visually legible at dashboard-card size, one coherent scene, no collage.
+On-image text: none during generation. The date is composited separately after generation, so do not render any words, letters, numerals, signs, labels, captions, speech bubbles, logos, watermarks, documents, pages, books, newspapers, maps, screens, teleprompters, or any written surface. If the scene direction mentions a script or paper, show only the people and their body language with the writing surface out of frame or blank. Do not depict the event itself; depict only the instant immediately before it.
+Avoid: modern objects in historical scenes, anachronistic clothing, graphic gore, blurry faces, extra limbs, illegible pseudo-text, and duplicate subjects."""
+
+
+def post_image(url: str, payload: dict[str, Any], *, timeout: int = 1800) -> bytes:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "BORGcube-MomentInHistory/1.0"},
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as response:
+        content_type = response.headers.get_content_type()
+        body = response.read()
+    if content_type != "image/png" or not body:
+        raise RuntimeError(f"Image backend returned {content_type} with {len(body)} bytes")
+    return body
+
+
+def generate_openai_image(prompt: str) -> bytes:
+    """Generate a PNG through the OpenAI Images API without logging the key."""
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OpenAI image API key is not configured")
+    payload = {
+        "model": OPENAI_IMAGE_MODEL,
+        "prompt": prompt,
+        "size": OPENAI_IMAGE_SIZE,
+        "quality": OPENAI_IMAGE_QUALITY,
+        "output_format": "png",
+    }
+    request = Request(
+        OPENAI_IMAGES_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "BORGcube-MomentInHistory/1.1",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=1800) as response:
+        response_payload = json.loads(response.read().decode("utf-8"))
+    data = response_payload.get("data") or []
+    if not data or not isinstance(data[0], dict):
+        raise RuntimeError("OpenAI image response contained no image data")
+    first = data[0]
+    encoded = first.get("b64_json")
+    if encoded:
+        try:
+            image = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("OpenAI returned invalid base64 image data") from exc
+        if image:
+            return image
+    image_url = first.get("url")
+    if image_url:
+        return fetch_bytes(str(image_url), timeout=1800)
+    raise RuntimeError("OpenAI image response contained neither b64_json nor url")
+
+
+def run_image_model(prompt: str, destination: Path) -> str:
+    """Ask OpenAI for a PNG, with the configured LAN backend as fallback.
+
+    This is intentionally separate from Ollama. Ollama remains the text/ranking
+    service, while image generation can use OpenAI or the LAN backend.
+    """
+    if IMAGE_PROVIDER == "openai":
+        try:
+            destination.write_bytes(generate_openai_image(prompt))
+            return f"OpenAI {OPENAI_IMAGE_MODEL} ({OPENAI_IMAGE_QUALITY}, {OPENAI_IMAGE_SIZE})"
+        except Exception as exc:  # noqa: BLE001 - keep the LAN fallback available
+            log(f"OpenAI image backend unavailable: {exc}; trying LAN fallback")
+
+    payload = {
+        "prompt": prompt,
+        "width": IMAGE_WIDTH,
+        "height": IMAGE_HEIGHT,
+        "steps": IMAGE_STEPS,
+    }
+    endpoints = [IMAGE_BACKEND_URL]
+    if IMAGE_BACKEND_FALLBACK_URL and IMAGE_BACKEND_FALLBACK_URL not in endpoints:
+        endpoints.append(IMAGE_BACKEND_FALLBACK_URL)
+    last_error: Exception | None = None
+    for endpoint in endpoints:
+        try:
+            destination.write_bytes(post_image(f"{endpoint.rstrip('/')}/generate", payload))
+            return f"LAN {IMAGE_MODEL} ({endpoint})"
+        except Exception as exc:  # noqa: BLE001 - try the configured fallback
+            last_error = exc
+            log(f"Image backend unavailable ({endpoint}): {exc}")
+    raise RuntimeError(f"All image backends failed: {last_error}")
+
+
+def overlay_date(path: Path, label: str) -> None:
+    """Guarantee that the only intentional text is the exact date."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        log("Pillow is not installed; relying on the image model's date rendering")
+        return
+    image = Image.open(path).convert("RGB")
+    draw = ImageDraw.Draw(image, "RGBA")
+    width, height = image.size
+    font_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/SFNS.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ]
+    font_path = next((candidate for candidate in font_candidates if Path(candidate).exists()), None)
+    font = ImageFont.truetype(font_path, max(20, width // 28)) if font_path else ImageFont.load_default()
+    band_height = max(54, height // 12)
+    draw.rectangle((0, height - band_height, width, height), fill=(0, 0, 0, 178))
+    bounds = draw.textbbox((0, 0), label, font=font)
+    text_width = bounds[2] - bounds[0]
+    text_height = bounds[3] - bounds[1]
+    draw.text(((width - text_width) // 2, height - band_height + (band_height - text_height) // 2 - bounds[1]), label, fill=(255, 255, 255, 255), font=font)
+    image.save(path, format="PNG", optimize=True)
+
+
+def write_event_pages(metadata: dict[str, Any]) -> None:
+    EVENT_JSON_PATH.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    source_link = html.escape(metadata["source_url"], quote=True)
+    title = html.escape(metadata["event"])
+    description = html.escape(metadata["description"])
+    pre_moment = html.escape(metadata["pre_moment"])
+    date_label = html.escape(metadata["date_label"])
+    source = html.escape(metadata["source"])
+    EVENT_HTML_PATH.write_text(
+        f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>Moment in history</title>
+<style>html,body{{margin:0;background:#111;color:#f6f1e8;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}main{{max-width:760px;margin:auto;padding:24px}}.date{{color:#d9a441;text-transform:uppercase;letter-spacing:.12em;font-size:.8rem}}h1{{font:700 clamp(1.4rem,4vw,2.4rem)/1.1 Georgia,serif;margin:.35rem 0 1rem}}p{{margin:0 0 1rem}}a{{color:#f0c46a}}</style></head>
+<body><main><div class="date" id="date">{date_label}</div><h1 id="event">{title}</h1><p><strong>Ten seconds before:</strong> <span id="pre-moment">{pre_moment}</span></p><p id="description">{description}</p><p><a id="source" href="{source_link}" target="_blank" rel="noreferrer">Source: {source}</a></p></main>
+<script>
+(async function () {{
+  try {{
+    const response = await fetch('./event.json?refresh=' + Date.now(), {{cache: 'no-store'}});
+    if (!response.ok) throw new Error('event metadata request failed');
+    const data = await response.json();
+    document.getElementById('date').textContent = data.date_label || '';
+    document.getElementById('event').textContent = data.event || '';
+    document.getElementById('pre-moment').textContent = data.pre_moment || '';
+    document.getElementById('description').textContent = data.description || '';
+    const sourceElement = document.getElementById('source');
+    sourceElement.href = data.source_url || '#';
+    sourceElement.textContent = data.source ? 'Source: ' + data.source : 'Source';
+  }} catch (error) {{
+    // The server-rendered values remain visible if the refresh is unavailable.
+    console.warn('Moment in history refresh failed', error);
+  }}
+}})();
+</script></body></html>
+""",
+        encoding="utf-8",
+    )
+    write_event_details_image(metadata)
+
+
+def write_event_details_image(metadata: dict[str, Any]) -> None:
+    """Publish disclosure content as an image so HA needs no YAML sensors or iframe."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        log("Pillow is not installed; disclosure image was not written")
+        return
+
+    width, height = 1600, 900
+    image = Image.new("RGB", (width, height), (17, 17, 17))
+    draw = ImageDraw.Draw(image)
+    font_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/SFNS.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ]
+    font_path = next((candidate for candidate in font_candidates if Path(candidate).exists()), None)
+
+    def font(size: int):
+        return ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
+
+    date_font = font(32)
+    heading_font = font(52)
+    body_font = font(30)
+    small_font = font(22)
+    margin = 80
+    y = 64
+    draw.text((margin, y), metadata["date_label"].upper(), fill=(217, 164, 65), font=date_font)
+    y += 62
+    draw.text((margin, y), "Event details", fill=(246, 241, 232), font=heading_font)
+    y += 88
+
+    def paragraph(label: str, value: str, *, gap: int = 28) -> None:
+        nonlocal y
+        draw.text((margin, y), label, fill=(217, 164, 65), font=small_font)
+        y += 34
+        lines = textwrap.wrap(clean_text(value), width=72) or [""]
+        for line in lines:
+            draw.text((margin, y), line, fill=(246, 241, 232), font=body_font)
+            y += 42
+        y += gap
+
+    paragraph("EVENT", metadata["event"], gap=24)
+    paragraph("TEN SECONDS BEFORE", metadata["pre_moment"], gap=24)
+    paragraph("SOURCE", f"{metadata['source']} — {metadata['source_url']}", gap=0)
+    image.save(EVENT_DETAILS_IMAGE_PATH, format="PNG", optimize=True)
+
+
+def log(message: str) -> None:
+    ROOT.mkdir(parents=True, exist_ok=True)
+    with LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(f"{datetime.now(TIME_ZONE).isoformat()} {message}\n")
+
+
+def generate(target_day: date) -> None:
+    ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        events = fetch_britannica_events(target_day)
+        source_status = "Britannica"
+    except (HTTPError, URLError, RuntimeError, TimeoutError) as exc:
+        log(f"Britannica unavailable ({exc}); using Wikimedia fallback")
+        events = fetch_wikimedia_events(target_day)
+        source_status = "Wikimedia fallback after Britannica attempt"
+
+    selected, selection_reason = choose_event(events)
+    pre_moment_prompt = f"Describe in exactly one vivid sentence of no more than 35 words the scene exactly ten seconds before this event, without depicting the event itself. Treat the supplied event as authoritative; do not add corrections, caveats, or commentary. Mention only people, setting, lighting, atmosphere, and non-text-bearing physical objects. Do not mention paper, pages, scripts, screens, signs, labels, logos, or writing: {selected.text}"
+    try:
+        pre_payload = {
+            "model": TEXT_MODEL,
+            "stream": False,
+            "messages": [{"role": "user", "content": pre_moment_prompt}],
+            "options": {"temperature": 0.35},
+        }
+        pre_response = json.loads(post_json_with_fallback("/api/chat", pre_payload))
+        pre_moment = clean_text(pre_response.get("message", {}).get("content", ""))
+    except Exception as exc:  # noqa: BLE001
+        log(f"Ollama pre-moment description failed: {exc}")
+        pre_moment = "The setting holds in tense anticipation, with every detail poised for what is about to happen."
+
+    date_label = f"{target_day.day} {target_day.strftime('%B %Y')}"
+    prompt = build_image_prompt(pre_moment, target_day)
+    temp_image = ROOT / f"moment-in-history-{int(time.time())}.png"
+    image_backend_used = run_image_model(prompt, temp_image)
+    overlay_date(temp_image, date_label)
+    os.replace(temp_image, IMAGE_PATH)
+
+    metadata = {
+        "date": target_day.isoformat(),
+        "date_label": date_label,
+        "event": selected.text,
+        "title": selected.title,
+        "year": selected.year,
+        "description": selected.text,
+        "pre_moment": pre_moment,
+        "selection_reason": selection_reason,
+        "source": source_status,
+        "source_url": selected.source_url,
+        "britannica_url": BRITANNICA_URL,
+        "image_url": IMAGE_URL,
+        "generated_at": datetime.now(TIME_ZONE).isoformat(),
+        "image_model": IMAGE_MODEL,
+        "image_provider": IMAGE_PROVIDER,
+        "image_backend_used": image_backend_used,
+        "openai_image_model": OPENAI_IMAGE_MODEL,
+        "text_model": TEXT_MODEL,
+        "candidate_count": len(events),
+        "prompt": prompt,
+    }
+    write_event_pages(metadata)
+    log(f"Generated {target_day.isoformat()} — {selected.text} ({len(events)} candidates; {source_status})")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--date", help="Generate for YYYY-MM-DD instead of today")
+    parser.add_argument("--daemon", action="store_true", help="Run continuously and generate once per day")
+    args = parser.parse_args()
+    ROOT.mkdir(parents=True, exist_ok=True)
+    if args.daemon:
+        return daemon()
+    target_day = date.fromisoformat(args.date) if args.date else datetime.now(TIME_ZONE).date()
+    with LOCK_PATH.open("w", encoding="utf-8") as lock_handle:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log("Generation already running; exiting")
+            return 0
+        generate(target_day)
+    return 0
+
+
+def daemon() -> int:
+    """Run inside the HA add-on and keep the daily asset current."""
+    marker_path = ROOT / ".last-generated-date"
+    last_attempt_date: date | None = None
+    last_attempt_at = 0.0
+    while True:
+        now = datetime.now(TIME_ZONE)
+        today = now.date()
+        try:
+            generated_date = date.fromisoformat(marker_path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            generated_date = None
+        schedule_reached = now.strftime("%H:%M") >= SCHEDULE_TIME
+        should_run = generated_date != today and (RUN_ON_STARTUP or schedule_reached)
+        retry_allowed = last_attempt_date != today or time.time() - last_attempt_at >= 900
+        if should_run and retry_allowed:
+            last_attempt_date = today
+            last_attempt_at = time.time()
+            try:
+                with LOCK_PATH.open("w", encoding="utf-8") as lock_handle:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                    generate(today)
+                    marker_path.write_text(today.isoformat() + "\n", encoding="utf-8")
+            except Exception as exc:  # noqa: BLE001 - daemon logs and retries
+                log(f"Daily generation failed: {exc}")
+        time.sleep(30)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

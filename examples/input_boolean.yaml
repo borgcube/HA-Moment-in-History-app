@@ -1,0 +1,5 @@
+# Use this only if you manage helpers in YAML.
+# Do not also create the same helper through the UI.
+disclose:
+  name: Disclose
+  icon: mdi:book-open-variant
