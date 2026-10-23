@@ -71,7 +71,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.9",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.10",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -1156,26 +1156,31 @@ def _page() -> str:
     setSmtpDialogMode('configure');
     document.getElementById('smtp-recipient').value = recipient || emailRecipient.value.trim();
     smtpStatus.textContent = '';
+    showSmtpDialog();
+  }
+  function showSmtpDialog() {
     if (typeof smtpDialog.showModal === 'function') {
       smtpDialog.showModal();
     } else {
       smtpDialog.setAttribute('open', 'open');
     }
   }
+  function resetSmtpForm() {
+    smtpForm.reset();
+    document.getElementById('smtp-port').value = '587';
+    document.getElementById('smtp-verify-ssl').checked = true;
+  }
   async function editSmtp() {
-    status.textContent = 'Loading Home Assistant SMTP settings…';
+    resetSmtpForm();
+    setSmtpDialogMode('configure');
+    smtpStatus.textContent = 'Loading Home Assistant SMTP settings…';
+    showSmtpDialog();
     try {
       const response = await fetch(apiPath('api/smtp'), { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'SMTP settings could not be loaded');
       if (data.configured !== true) {
-        smtpForm.reset();
-        document.getElementById('smtp-port').value = '587';
-        document.getElementById('smtp-verify-ssl').checked = true;
-        setSmtpDialogMode('configure');
         smtpStatus.textContent = 'Enter the SMTP details Home Assistant should use.';
-        if (typeof smtpDialog.showModal === 'function') smtpDialog.showModal();
-        else smtpDialog.setAttribute('open', 'open');
         return;
       }
       setSmtpDialogMode('update');
@@ -1189,10 +1194,8 @@ def _page() -> str:
       document.getElementById('smtp-verify-ssl').checked = data.verify_ssl !== false;
       document.getElementById('smtp-recipient').value = '';
       smtpStatus.textContent = 'Enter the SMTP password again if your server requires authentication.';
-      if (typeof smtpDialog.showModal === 'function') smtpDialog.showModal();
-      else smtpDialog.setAttribute('open', 'open');
     } catch (error) {
-      status.textContent = 'Unable to load SMTP settings: ' + error.message;
+      smtpStatus.textContent = 'Unable to load SMTP settings: ' + error.message;
     }
   }
   async function testEmail() {
@@ -1205,7 +1208,7 @@ def _page() -> str:
       if (!smtpResponse.ok) throw new Error(smtp.error || 'SMTP settings could not be checked');
       if (smtp.configured !== true) {
         status.textContent = 'Configure SMTP settings first.';
-        editSmtp();
+        await editSmtp();
         return;
       }
       if (!Array.from(emailEntity.selectedOptions).some(function (option) { return option.value; })) {
