@@ -403,6 +403,10 @@ def _smtp_flow_values(flow: dict[str, Any]) -> dict[str, Any]:
             values[name] = field["value"]
         elif "suggested_value" in field:
             values[name] = field["suggested_value"]
+        elif isinstance(field.get("description"), dict) and "suggested_value" in field["description"]:
+            # Home Assistant serializes values added by
+            # ``add_suggested_values_to_schema`` inside the field description.
+            values[name] = field["description"]["suggested_value"]
     return values
 
 

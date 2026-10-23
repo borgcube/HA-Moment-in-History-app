@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.16 starting", report)
+            self.assertIn("Moment in history App 1.9.17 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -773,7 +773,7 @@ class ModelSelectionTest(unittest.TestCase):
             "flow_id": "flow-details",
             "data_schema": [
                 {"name": "sender", "value": "sender@example.com"},
-                {"name": "sender_name", "suggested_value": "Moment in history"},
+                {"name": "sender_name", "description": {"suggested_value": "Moment in history"}},
                 {"name": "server", "value": "smtp.example.com"},
                 {"name": "port", "value": 465},
                 {"name": "encryption", "value": "tls"},
