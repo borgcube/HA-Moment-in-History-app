@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.6 starting", report)
+            self.assertIn("Moment in history App 1.9.7 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -463,6 +463,18 @@ class ModelSelectionTest(unittest.TestCase):
                 ["custom.safetensors", "sd_xl_turbo_1.0.safetensors"],
             )
 
+    def test_compatible_local_image_api_model_is_discovered_from_health(self):
+        with patch.object(
+            config_ui,
+            "_request_json",
+            return_value={"ok": True, "model": "Tongyi-MAI/Z-Image-Turbo"},
+        ) as request_json:
+            self.assertEqual(
+                config_ui.image_backend_models("http://storage01.example:8188"),
+                ["Tongyi-MAI/Z-Image-Turbo"],
+            )
+        request_json.assert_called_once_with("http://storage01.example:8188/health")
+
     def test_model_discovery_includes_detected_image_checkpoints(self):
         with patch.object(config_ui, "ollama_models", return_value=[]), \
                 patch.object(config_ui, "image_backend_models", return_value=["detected.safetensors"]):
@@ -774,7 +786,7 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="schedule-time"', page)
             self.assertIn('id="email-camera-entity"', page)
             self.assertIn('id="save" type="button">Save configuration', page)
-            self.assertIn("Fallback image API / ComfyUI URL", page)
+            self.assertIn("Fallback local image API / ComfyUI URL", page)
             self.assertIn('id="comfyui-model-options"', page)
             self.assertIn("dirtyFields", page)
             self.assertIn("/api/tags", page)

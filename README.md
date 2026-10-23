@@ -88,7 +88,7 @@ Configure the provider in **Info → Open Web UI**. `openai` uses the OpenAI Ima
 
 `comfyui` calls the ComfyUI API at `image_backend_url`. It queues a native checkpoint/KSampler/VAEDecode/SaveImage workflow, polls `/history/{prompt_id}`, and downloads the PNG from `/view`. Set `comfyui_model` to the checkpoint filename in ComfyUI's `models/checkpoints` directory. The Web UI discovers available checkpoints from ComfyUI and offers them as suggestions. The workflow uses the selected Image size and Image steps; SDXL Turbo is normally used with one step and square dimensions. A configured `image_backend_fallback_url` is also tried for ComfyUI if the primary endpoint fails.
 
-On the OpenClaw host, ComfyUI listens only on `127.0.0.1:8188`. Apache exposes it to Home Assistant at `https://openclaw.borgcube.com/comfyui`; use that URL in the Web UI rather than adding `:8188`.
+On the OpenClaw host, ComfyUI listens only on `127.0.0.1:8188`. Apache exposes it to Home Assistant at `https://openclaw.borgcube.com/comfyui`; use that URL in the Web UI rather than adding `:8188`. A compatible local image API can be used as the primary or fallback URL instead; for example, the service on `storage01.borgcube.com:8188` exposes `/health` and `/generate`, not ComfyUI's checkpoint routes. The Web UI detects its model from `/health` and will no longer report a false ComfyUI 404 for that service.
 
 The OpenAI path automatically tries the configured LAN image backend if the OpenAI request fails. Ollama remains the text/ranking service for all image providers.
 

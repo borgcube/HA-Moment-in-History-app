@@ -71,7 +71,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.6",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.7",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -194,10 +194,22 @@ def openai_image_models(api_key: str) -> list[str]:
 
 
 def image_backend_models(base_url: str) -> list[str]:
-    """Discover ComfyUI checkpoints exposed by a local image backend."""
+    """Discover a compatible API model or ComfyUI checkpoint."""
     if not base_url.strip():
         return []
     last_error: Exception | None = None
+
+    # The compatible local image service exposes its loaded model through
+    # /health and intentionally does not implement ComfyUI's checkpoint APIs.
+    try:
+        health = _request_json(f"{base_url.rstrip('/')}/health")
+        if isinstance(health, dict):
+            model = str(health.get("model", "")).strip()
+            if model:
+                return [model]
+    except Exception as exc:  # noqa: BLE001 - try the ComfyUI API next
+        last_error = exc
+
     for path in ("/models/checkpoints", "/object_info/CheckpointLoaderSimple"):
         try:
             payload = _request_json(f"{base_url.rstrip('/')}{path}")
@@ -818,14 +830,14 @@ def _page() -> str:
         <input id="image-backend-url" type="url" inputmode="url" placeholder="https://openclaw.borgcube.com/comfyui">
       </div>
       <div>
-        <label for="image-backend-fallback-url">Fallback image API / ComfyUI URL</label>
+        <label for="image-backend-fallback-url">Fallback local image API / ComfyUI URL</label>
         <input id="image-backend-fallback-url" type="url" inputmode="url" placeholder="Optional">
       </div>
       <div class="full">
-        <label for="comfyui-model">ComfyUI checkpoint filename</label>
+        <label for="comfyui-model">Local image model / ComfyUI checkpoint</label>
         <input id="comfyui-model" list="comfyui-model-options" type="text" placeholder="sd_xl_turbo_1.0.safetensors">
         <datalist id="comfyui-model-options"></datalist>
-        <p class="hint">Image size is selected in the App Configuration page. Image steps are also there and apply only to local diffusion backends; OpenAI ignores them.</p>
+        <p class="hint">The app detects a compatible local API model from <code>/health</code> or ComfyUI checkpoints from its API. Image size is selected in the App Configuration page. Image steps apply only to local diffusion backends; OpenAI ignores them.</p>
       </div>
     </div>
   </section>
