@@ -45,7 +45,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.8.6 starting", report)
+            self.assertIn("Moment in history App 1.8.7 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -595,6 +595,9 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="email-enabled"', page)
             self.assertIn('id="smtp-dialog"', page)
             self.assertIn("Refresh now", page)
+            self.assertIn("not Ollama Open WebUI", page)
+            self.assertIn("/api/tags", page)
+            self.assertIn("/v1/models", page)
             self.assertIn("document.addEventListener('visibilitychange'", page)
             self.assertIn("window.setInterval", page)
 

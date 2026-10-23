@@ -52,7 +52,7 @@ The app needs access to `/config` and writes generated files to `/config/www/mom
 
 ### Live model selection
 
-The App includes a Home Assistant **Ingress** configuration page. Open the App's **Info** tab and choose **Open Web UI**. The page automatically queries the configured endpoints when it opens, returns to the foreground, regains focus, and periodically while visible. Use **Refresh now** when you want to retry immediately:
+The App includes a Home Assistant **Ingress** configuration page. Open the App's **Info** tab and choose **Open Web UI**. This is the App's Home Assistant configuration page, not Ollama Open WebUI; model discovery uses the provider APIs directly. The page automatically queries the configured endpoints when it opens, returns to the foreground, regains focus, and periodically while visible. Use **Refresh now** when you want to retry immediately:
 
 - the primary Ollama endpoint's `/api/tags` response;
 - the fallback Ollama endpoint's `/api/tags` response; and

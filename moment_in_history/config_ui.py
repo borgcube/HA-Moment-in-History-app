@@ -619,7 +619,7 @@ def _page() -> str:
 <body>
 <main>
   <h1>Moment in history — model selection</h1>
-  <p>Model lists are queried automatically when this page opens and when it returns to the foreground. Use Refresh now to retry immediately. Saving a selection updates the App options through Home Assistant and restarts the App.</p>
+  <p>This is Home Assistant’s configuration page, not Ollama Open WebUI. Model discovery uses the provider APIs directly: Ollama <code>/api/tags</code> and OpenAI <code>/v1/models</code>. Lists are queried automatically when this page opens and when it returns to the foreground. Use Refresh now to retry immediately. Saving a selection updates the App options through Home Assistant and restarts the App.</p>
 
   <section>
     <h2>Ollama</h2>
