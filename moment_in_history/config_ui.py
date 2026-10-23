@@ -71,7 +71,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.5",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.6",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -598,11 +598,14 @@ def add_smtp_recipient(api_url: str, token: str, email: str) -> dict[str, Any]:
     flow_id = str(flow.get("flow_id", "")) if isinstance(flow, dict) else ""
     if not flow_id:
         raise RuntimeError("Home Assistant did not start the SMTP recipient flow")
+    # Home Assistant's config-flow REST endpoint accepts the submitted form
+    # fields directly.  Wrapping them in ``user_input`` makes that wrapper
+    # itself look like an unknown form field on current releases.
     result = _request_json(
         f"{api_url.rstrip('/')}/config/config_entries/subentries/flow/{flow_id}",
         headers=_home_assistant_headers(token),
         method="POST",
-        payload={"user_input": {"recipient": email}},
+        payload={"recipient": email},
     )
     if not isinstance(result, dict) or result.get("type") != "create_entry":
         raise RuntimeError(_config_flow_error(result, "Home Assistant rejected the recipient"))
@@ -663,7 +666,7 @@ def configure_smtp(api_url: str, token: str, settings: dict[str, Any]) -> dict[s
         f"{api_url.rstrip('/')}/config/config_entries/flow/{flow_id}",
         headers=_home_assistant_headers(token),
         method="POST",
-        payload={"user_input": user_input},
+        payload=user_input,
     )
     if not isinstance(result, dict) or result.get("type") != "create_entry":
         raise RuntimeError(_config_flow_error(result, "Home Assistant rejected the SMTP settings"))
@@ -674,7 +677,7 @@ def configure_smtp(api_url: str, token: str, settings: dict[str, Any]) -> dict[s
             f"{api_url.rstrip('/')}/config/config_entries/subentries/flow/{str(next_flow[1])}",
             headers=_home_assistant_headers(token),
             method="POST",
-            payload={"user_input": {"recipient": recipient}},
+            payload={"recipient": recipient},
         )
         if not isinstance(recipient_result, dict) or recipient_result.get("type") != "create_entry":
             raise RuntimeError(

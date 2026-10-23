@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.5 starting", report)
+            self.assertIn("Moment in history App 1.9.6 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -572,7 +572,7 @@ class ModelSelectionTest(unittest.TestCase):
                 [entry],
                 created_states,
             ],
-        ), patch.object(
+        ) as request_json, patch.object(
             config_ui,
             "_websocket_command",
             side_effect=[
@@ -592,6 +592,10 @@ class ModelSelectionTest(unittest.TestCase):
                 "entry_id": "smtp-entry",
                 "subentry_id": "subentry-2",
             },
+        )
+        self.assertEqual(
+            request_json.call_args_list[4].kwargs["payload"],
+            {"recipient": "new@example.com"},
         )
 
     def test_smtp_setup_flow_creates_integration_and_first_recipient_without_retaining_password(self):
@@ -631,9 +635,10 @@ class ModelSelectionTest(unittest.TestCase):
 
         self.assertEqual(created, recipient)
         setup_payload = request_json.call_args_list[2].kwargs["payload"]
-        self.assertEqual(setup_payload["user_input"]["server"], "smtp.example.com")
-        self.assertEqual(setup_payload["user_input"]["password"], "secret-password")
-        self.assertEqual(request_json.call_args_list[3].kwargs["payload"], {"user_input": {"recipient": "new@example.com"}})
+        self.assertEqual(setup_payload["server"], "smtp.example.com")
+        self.assertEqual(setup_payload["password"], "secret-password")
+        self.assertNotIn("user_input", setup_payload)
+        self.assertEqual(request_json.call_args_list[3].kwargs["payload"], {"recipient": "new@example.com"})
 
     def test_ingress_ui_exposes_smtp_setup_endpoint(self):
         settings: list[dict[str, object]] = []
