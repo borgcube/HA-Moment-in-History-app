@@ -45,7 +45,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.8.5 starting", report)
+            self.assertIn("Moment in history App 1.8.6 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -594,7 +594,9 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('<select id="email-entity" multiple', page)
             self.assertIn('id="email-enabled"', page)
             self.assertIn('id="smtp-dialog"', page)
-            self.assertIn("Refresh available models", page)
+            self.assertIn("Refresh now", page)
+            self.assertIn("document.addEventListener('visibilitychange'", page)
+            self.assertIn("window.setInterval", page)
 
             with urlopen(f"http://127.0.0.1:{port}/api/models") as response:
                 discovery = json.loads(response.read().decode("utf-8"))

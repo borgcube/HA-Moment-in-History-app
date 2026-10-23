@@ -39,7 +39,7 @@ Home Assistant creates a separate `notify.*` entity for each SMTP recipient. SMT
 
 ### Connect SMTP recipients to the app
 
-Open **Moment in history → Info → Open Web UI** and select **Refresh available models and notifications**. Existing `notify.*` entities appear in the **Email delivery** list; enable **Send the daily image and event by email**, select one or more recipients, and save.
+Open **Moment in history → Info → Open Web UI**. The page automatically discovers the configured Ollama/OpenAI models and existing `notify.*` entities when it opens and when it returns to the foreground. Use **Refresh now** only for an immediate retry. Existing `notify.*` entities appear in the **Email delivery** list; enable **Send the daily image and event by email**, select one or more recipients, and save.
 
 The same page can manage recipients after SMTP has been configured: type an email address and press **Space**, **Enter**, or **Add email**. The app asks Home Assistant to create the SMTP recipient and displays the resulting email-to-`notify.*` pill. Removing a pill removes only the SMTP recipient created through this app. If automatic recipient management is unavailable, add recipients in the SMTP integration and select their existing `notify.*` entities instead.
 

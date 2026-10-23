@@ -52,7 +52,7 @@ The app needs access to `/config` and writes generated files to `/config/www/mom
 
 ### Live model selection
 
-The App includes a Home Assistant **Ingress** configuration page. Open the App's **Info** tab and choose **Open Web UI**, then use **Refresh available models and notifications** to query:
+The App includes a Home Assistant **Ingress** configuration page. Open the App's **Info** tab and choose **Open Web UI**. The page automatically queries the configured endpoints when it opens, returns to the foreground, regains focus, and periodically while visible. Use **Refresh now** when you want to retry immediately:
 
 - the primary Ollama endpoint's `/api/tags` response;
 - the fallback Ollama endpoint's `/api/tags` response; and
@@ -124,7 +124,7 @@ You can set it up before enabling email delivery:
 1. Go to **Settings → Devices & services → Add integration → SMTP**.
 2. Enter the SMTP account details and complete the integration setup.
 3. Add one or more recipients to the SMTP integration. Home Assistant creates a `notify.*` entity for each recipient.
-4. Open **Moment in history → Info → Open Web UI** and refresh the model and notification lists. All current `notify.*` entities are available in the multi-select under **Email delivery**.
+4. Open **Moment in history → Info → Open Web UI**. The model and notification lists are queried automatically; use **Refresh now** only if you need an immediate retry. All current `notify.*` entities are available in the multi-select under **Email delivery**.
 
 Alternatively, enable **Send the daily image and event by email** in the App Web UI. If no SMTP integration is found, the App opens a setup dialog for the same sender, host, port, encryption, credentials, and first recipient fields. It submits the values through Home Assistant's supported SMTP config-flow API and waits for the resulting `notify.*` entity. Credentials are sent directly to Home Assistant and are never saved in the App's `/data` mapping or returned to the browser. Once SMTP exists, type an email address and press Space, Enter, or **Add email** to create additional recipients. Removing a managed pill removes the corresponding SMTP recipient through Home Assistant. If the installed Home Assistant version does not expose the supported config-flow API, automatic management is disabled and the existing `notify.*` dropdown remains available. This follows Home Assistant's documented config-flow and subentry model rather than editing `.storage` files directly; see the [Home Assistant config-flow documentation](https://developers.home-assistant.io/docs/core/integration/config_flow/).
 

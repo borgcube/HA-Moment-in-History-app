@@ -619,7 +619,7 @@ def _page() -> str:
 <body>
 <main>
   <h1>Moment in history — model selection</h1>
-  <p>Refresh the lists to read the models currently advertised by each endpoint. Saving a selection updates the App options through Home Assistant and restarts the App.</p>
+  <p>Model lists are queried automatically when this page opens and when it returns to the foreground. Use Refresh now to retry immediately. Saving a selection updates the App options through Home Assistant and restarts the App.</p>
 
   <section>
     <h2>Ollama</h2>
@@ -653,7 +653,7 @@ def _page() -> str:
     <p class="hint">Added addresses are created through Home Assistant’s SMTP integration. Removing a pill removes only the SMTP recipient created through this page. Select Save selections to apply delivery targets.</p>
   </section>
 
-  <button class="secondary" id="refresh" type="button">Refresh available models and notifications</button>
+  <button class="secondary" id="refresh" type="button">Refresh now</button>
   <button id="save" type="button">Save selections</button>
   <div class="status" id="status" role="status"></div>
   <div id="errors"></div>
@@ -771,18 +771,26 @@ def _page() -> str:
       errors.appendChild(item);
     });
   }
-  async function refresh() {
-    status.textContent = 'Querying configured endpoints…';
-    try {
-      const response = await fetch(apiPath('api/models'), { cache: 'no-store' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'model discovery failed');
-      render(data);
-      status.textContent = 'Model lists refreshed.';
-      return data;
-    } catch (error) {
-      status.textContent = 'Unable to query models: ' + error.message;
-    }
+  let refreshInFlight = null;
+  async function refresh(options) {
+    const silent = Boolean(options && options.silent);
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = (async function () {
+      if (!silent) status.textContent = 'Querying configured endpoints…';
+      try {
+        const response = await fetch(apiPath('api/models'), { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'model discovery failed');
+        render(data);
+        if (!silent) status.textContent = 'Model lists refreshed.';
+        return data;
+      } catch (error) {
+        if (!silent) status.textContent = 'Unable to query models: ' + error.message;
+      } finally {
+        refreshInFlight = null;
+      }
+    }());
+    return refreshInFlight;
   }
   async function manageEmail(action, email) {
     const response = await fetch(apiPath('api/email-recipient'), {
@@ -946,6 +954,13 @@ def _page() -> str:
       addEmail();
     }
   });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refresh({ silent: true });
+  });
+  window.addEventListener('focus', function () { refresh({ silent: true }); });
+  window.setInterval(function () {
+    if (!document.hidden) refresh({ silent: true });
+  }, 30000);
   refresh();
 }());
 </script>
