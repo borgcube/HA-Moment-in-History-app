@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.1"
+APP_VERSION = "1.9.2"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,13 +74,18 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.1",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.2",
         },
     )
     try:
         with urlopen(request, timeout=5) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except Exception:  # noqa: BLE001 - local options remain a safe fallback
+    except Exception as exc:  # noqa: BLE001 - local options remain a safe fallback
+        print(
+            f"Supervisor option lookup unavailable: {type(exc).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
         return {}
     candidates = [payload]
     if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
@@ -825,7 +830,7 @@ def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.1",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.2",
         },
         method="POST",
     )
@@ -855,7 +860,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.1",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.2",
         },
         method="POST",
     )
