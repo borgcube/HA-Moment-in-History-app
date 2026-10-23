@@ -13,22 +13,21 @@ from urllib.request import Request, urlopen
 
 OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
 MODEL_FIELDS = ("text_model", "fallback_text_model", "openai_image_model")
+SELECTABLE_FIELDS = MODEL_FIELDS + ("email_notify_entity",)
 MAX_REQUEST_BYTES = 16 * 1024
 
 
-def _request_json(url: str, *, headers: dict[str, str] | None = None) -> dict[str, Any]:
+def _request_json(url: str, *, headers: dict[str, str] | None = None) -> Any:
     request = Request(
         url,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.7",
+            "User-Agent": "BORGcube-MomentInHistory/1.8",
             **(headers or {}),
         },
     )
     with urlopen(request, timeout=15) as response:
         payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("response was not an object")
     return payload
 
 
@@ -61,6 +60,8 @@ def ollama_models(base_url: str) -> list[str]:
     if not base_url.strip():
         return []
     payload = _request_json(f"{base_url.rstrip('/')}/api/tags")
+    if not isinstance(payload, dict):
+        raise ValueError("Ollama response was not an object")
     models = payload.get("models") or []
     names = {
         str(item.get("name", "")).strip()
@@ -95,6 +96,8 @@ def openai_image_models(api_key: str) -> list[str]:
         OPENAI_MODELS_URL,
         headers={"Authorization": f"Bearer {api_key.strip()}"},
     )
+    if not isinstance(payload, dict):
+        raise ValueError("OpenAI response was not an object")
     model_ids = {
         str(item.get("id", "")).strip()
         for item in payload.get("data", [])
@@ -129,6 +132,7 @@ def discover_models(options: dict[str, Any]) -> dict[str, Any]:
             "text_model": str(options.get("text_model", "")),
             "fallback_text_model": str(options.get("fallback_text_model", "")),
             "openai_image_model": str(options.get("openai_image_model", "")),
+            "email_notify_entity": str(options.get("email_notify_entity", "")),
             "image_provider": str(options.get("image_provider", "openai")),
             "openai_key_present": bool(api_key),
         },
@@ -161,6 +165,25 @@ def discover_models(options: dict[str, Any]) -> dict[str, Any]:
         result["errors"]["openai_image"] = "enter an OpenAI API key in App Configuration first"
 
     return result
+
+
+def home_assistant_notify_entities(api_url: str, supervisor_token: str) -> list[str]:
+    """Return Home Assistant notify entities without exposing their states."""
+    if not supervisor_token.strip():
+        return []
+    payload = _request_json(
+        f"{api_url.rstrip('/')}/states",
+        headers={"Authorization": f"Bearer {supervisor_token.strip()}"},
+    )
+    states = payload if isinstance(payload, list) else payload.get("states", []) if isinstance(payload, dict) else []
+    return sorted(
+        {
+            str(item.get("entity_id", "")).strip()
+            for item in states
+            if isinstance(item, dict) and str(item.get("entity_id", "")).startswith("notify.")
+        },
+        key=str.casefold,
+    )
 
 
 def _page() -> str:
@@ -213,8 +236,15 @@ def _page() -> str:
     <select id="openai-model"></select>
   </section>
 
-  <button class="secondary" id="refresh" type="button">Refresh available models</button>
-  <button id="save" type="button">Save model selection</button>
+  <section>
+    <h2>Email delivery</h2>
+    <p class="hint" id="email-status">Configure Home Assistant SMTP and add at least one recipient before selecting an email target.</p>
+    <label for="email-entity">SMTP notify entity</label>
+    <select id="email-entity" multiple size="4"></select>
+  </section>
+
+  <button class="secondary" id="refresh" type="button">Refresh available models and notifications</button>
+  <button id="save" type="button">Save selections</button>
   <div class="status" id="status" role="status"></div>
   <div id="errors"></div>
 </main>
@@ -223,7 +253,8 @@ def _page() -> str:
   const fields = [
     { id: 'primary-model', config: 'text_model', result: 'primary_ollama', label: 'Saved value' },
     { id: 'fallback-model', config: 'fallback_text_model', result: 'fallback_ollama', label: 'Saved value' },
-    { id: 'openai-model', config: 'openai_image_model', result: 'openai_image', label: 'Saved value' }
+    { id: 'openai-model', config: 'openai_image_model', result: 'openai_image', label: 'Saved value' },
+    { id: 'email-entity', config: 'email_notify_entity', result: 'email_notify', label: 'Saved value', allowEmpty: true, multiple: true }
   ];
   const status = document.getElementById('status');
   const errors = document.getElementById('errors');
@@ -234,14 +265,16 @@ def _page() -> str:
   }
   function fill(field, current, models, disabled) {
     const select = document.getElementById(field.id);
+    const currentValues = field.multiple ? (current || '').split(',').map(function (value) { return value.trim(); }).filter(Boolean) : [current];
     select.replaceChildren();
-    if (current && !models.includes(current)) {
-      const saved = new Option(current + ' (' + field.label + '; not currently advertised)', current);
-      select.add(saved);
-    }
+    currentValues.forEach(function (value) {
+      if (!models.includes(value)) select.add(new Option(value + ' (' + field.label + '; not currently advertised)', value));
+    });
     models.forEach(function (model) { select.add(new Option(model, model)); });
-    if (current) select.value = current;
-    if (!select.options.length) select.add(new Option('No models discovered', ''));
+    Array.from(select.options).forEach(function (option) { option.selected = currentValues.includes(option.value); });
+    if (!select.options.length) {
+      select.add(new Option(field.allowEmpty ? 'Email delivery disabled' : 'No models discovered', ''));
+    }
     select.disabled = disabled;
   }
   function render(data) {
@@ -252,9 +285,14 @@ def _page() -> str:
     fill(fields[0], config.text_model, models.primary_ollama || [], false);
     fill(fields[1], config.fallback_text_model, models.fallback_ollama || [], false);
     fill(fields[2], config.openai_image_model, models.openai_image || [], !config.openai_key_present);
+    const email = data.email || {};
+    fill(fields[3], config.email_notify_entity, email.notify_entities || [], false);
     document.getElementById('openai-status').textContent = config.openai_key_present
       ? 'Image models visible to the configured API key are listed below.'
       : 'Enter an OpenAI API key in App Configuration first, then refresh this page.';
+    document.getElementById('email-status').textContent = email.notify_entities && email.notify_entities.length
+      ? 'Choose one or more SMTP recipient entities that should receive generated images.'
+      : 'No notify entities were found. Configure Home Assistant SMTP and add a recipient first.';
     errors.replaceChildren();
     Object.keys(data.errors || {}).forEach(function (key) {
       const item = document.createElement('div');
@@ -278,7 +316,12 @@ def _page() -> str:
   async function save() {
     status.textContent = 'Saving model selection…';
     const values = {};
-    fields.forEach(function (field) { values[field.config] = document.getElementById(field.id).value; });
+    fields.forEach(function (field) {
+      const select = document.getElementById(field.id);
+      values[field.config] = field.multiple
+        ? Array.from(select.selectedOptions).map(function (option) { return option.value; }).filter(Boolean).join(',')
+        : select.value;
+    });
     try {
       const response = await fetch(apiPath('api/config'), {
         method: 'POST',
@@ -308,11 +351,12 @@ def start_server(
     get_options: Callable[[], dict[str, Any]],
     save_options: Callable[[dict[str, str]], None],
     log: Callable[[str], None],
+    get_notify_entities: Callable[[], list[str]] | None = None,
 ) -> ThreadingHTTPServer:
     """Start the authenticated-by-Ingress configuration server."""
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "MomentInHistoryConfig/1.7"
+        server_version = "MomentInHistoryConfig/1.8"
 
         def _allowed_client(self) -> bool:
             # Home Assistant Ingress uses 172.30.32.2. Localhost remains useful
@@ -343,7 +387,14 @@ def start_server(
                 return
             if path == "/api/models":
                 try:
-                    self._json(200, discover_models(get_options()))
+                    result = discover_models(get_options())
+                    result["email"] = {"notify_entities": []}
+                    if get_notify_entities:
+                        try:
+                            result["email"]["notify_entities"] = get_notify_entities()
+                        except Exception as exc:  # noqa: BLE001 - show a safe UI diagnostic
+                            result["errors"]["email"] = _safe_error(exc)
+                    self._json(200, result)
                 except Exception as exc:  # noqa: BLE001 - return a safe diagnostic
                     log(f"Configuration UI model discovery failed: {_safe_error(exc)}")
                     self._json(500, {"error": "model discovery failed"})
@@ -366,8 +417,9 @@ def start_server(
                     raise ValueError("request must be an object")
                 changes = {
                     field: str(payload[field]).strip()
-                    for field in MODEL_FIELDS
-                    if field in payload and str(payload[field]).strip()
+                    for field in SELECTABLE_FIELDS
+                    if field in payload
+                    and (str(payload[field]).strip() or field == 'email_notify_entity')
                 }
                 if not changes:
                     raise ValueError("no model selection was supplied")

@@ -16,6 +16,7 @@ image_model: Tongyi-MAI/Z-Image-Turbo
 image_width: 1024
 image_height: 1024
 image_steps: 9
+# Select one or more SMTP notify entities in App Info -> Open Web UI.
 email_notify_entity: notify.moment_in_history_recipient
 email_camera_entity: camera.moment_in_history
 archive_images: false

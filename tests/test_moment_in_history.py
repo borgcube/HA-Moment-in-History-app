@@ -43,7 +43,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.7.0 starting", report)
+            self.assertIn("Moment in history App 1.8.0 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -139,6 +139,31 @@ class EventPageRefreshTest(unittest.TestCase):
             )
             self.assertEqual(request.get_header("Authorization"), "Bearer secret-supervisor-token")
 
+    def test_event_email_supports_multiple_smtp_notify_entities(self):
+        metadata = {
+            "date_label": "23 October 2026",
+            "event": "Current event",
+            "pre_moment": "The room holds its breath.",
+            "source": "Test source",
+            "source_url": "https://example.invalid/event",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "moment-in-history.png"
+            image_path.write_bytes(b"fake png")
+            response = MagicMock()
+            response.__enter__.return_value = response
+            response.read.return_value = b"[]"
+            with patch.object(moment_in_history, "EMAIL_NOTIFY_ENTITY", "notify.first, notify.second"), \
+                    patch.object(moment_in_history, "EMAIL_CAMERA_ENTITY", "camera.moment_in_history"), \
+                    patch.object(moment_in_history, "SUPERVISOR_TOKEN", "secret-supervisor-token"), \
+                    patch.object(moment_in_history, "ROOT", Path(directory)), \
+                    patch.object(moment_in_history, "LOG_PATH", Path(directory) / "generation.log"), \
+                    patch.object(moment_in_history, "urlopen", return_value=response) as urlopen:
+                moment_in_history.send_event_email(metadata, image_path)
+
+            payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+            self.assertEqual(payload["entity_id"], ["notify.first", "notify.second"])
+
     def test_generation_failure_does_not_send_email(self):
         event = moment_in_history.Event(
             year=1868,
@@ -227,6 +252,21 @@ class ModelSelectionTest(unittest.TestCase):
         self.assertTrue(result["config"]["openai_key_present"])
         self.assertEqual(result["models"]["openai_image"], ["gpt-image-2"])
 
+    def test_home_assistant_notify_entities_are_discovered(self):
+        with patch.object(
+            config_ui,
+            "_request_json",
+            return_value=[
+                {"entity_id": "notify.email_recipient"},
+                {"entity_id": "sensor.not_an_email"},
+                {"entity_id": "notify.telegram"},
+            ],
+        ):
+            self.assertEqual(
+                config_ui.home_assistant_notify_entities("http://supervisor/core/api", "secret-token"),
+                ["notify.email_recipient", "notify.telegram"],
+            )
+
     def test_model_save_preserves_existing_options_and_secret(self):
         response = MagicMock()
         response.__enter__.return_value = response
@@ -256,16 +296,23 @@ class ModelSelectionTest(unittest.TestCase):
                 "text_model": "old-primary",
                 "fallback_text_model": "old-fallback",
                 "openai_image_model": "gpt-image-2",
+                "email_notify_entity": "notify.email_recipient",
             },
             save_options=saved.append,
             log=lambda message: None,
+            get_notify_entities=lambda: ["notify.email_recipient"],
         )
         port = server.server_address[1]
         try:
             with urlopen(f"http://127.0.0.1:{port}/") as response:
                 page = response.read().decode("utf-8")
             self.assertIn('<select id="primary-model">', page)
+            self.assertIn('<select id="email-entity" multiple', page)
             self.assertIn("Refresh available models", page)
+
+            with urlopen(f"http://127.0.0.1:{port}/api/models") as response:
+                discovery = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(discovery["email"]["notify_entities"], ["notify.email_recipient"])
 
             request = Request(
                 f"http://127.0.0.1:{port}/api/config",
@@ -274,6 +321,7 @@ class ModelSelectionTest(unittest.TestCase):
                         "text_model": "new-primary",
                         "fallback_text_model": "new-fallback",
                         "openai_image_model": "gpt-image-2",
+                        "email_notify_entity": "notify.email_recipient",
                     }
                 ).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
@@ -282,7 +330,15 @@ class ModelSelectionTest(unittest.TestCase):
             with urlopen(request) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             self.assertTrue(payload["restart_required"])
-            self.assertEqual(saved, [{"text_model": "new-primary", "fallback_text_model": "new-fallback", "openai_image_model": "gpt-image-2"}])
+            self.assertEqual(
+                saved,
+                [{
+                    "text_model": "new-primary",
+                    "fallback_text_model": "new-fallback",
+                    "openai_image_model": "gpt-image-2",
+                    "email_notify_entity": "notify.email_recipient",
+                }],
+            )
         finally:
             server.shutdown()
             server.server_close()

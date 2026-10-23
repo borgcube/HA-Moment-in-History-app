@@ -50,13 +50,13 @@ The app needs access to `/config` and writes generated files to `/config/www/mom
 
 ### Live model selection
 
-The App includes a Home Assistant **Ingress** configuration page. Open the App's **Info** tab and choose **Open Web UI**, then use **Refresh available models** to query:
+The App includes a Home Assistant **Ingress** configuration page. Open the App's **Info** tab and choose **Open Web UI**, then use **Refresh available models and notifications** to query:
 
 - the primary Ollama endpoint's `/api/tags` response;
 - the fallback Ollama endpoint's `/api/tags` response; and
 - OpenAI's `/v1/models` endpoint, filtered to image-capable model IDs, when an OpenAI API key is configured.
 
-Choose the primary text model, fallback text model, and OpenAI image model from the resulting dropdowns and select **Save model selection**. The App saves the values through Home Assistant Supervisor and restarts so the new choices become active. The API key is used only inside the App and is never sent to the browser or written to the model-discovery response.
+Choose the primary text model, fallback text model, OpenAI image model, and one or more SMTP recipient entities from the resulting dropdowns and select **Save selections**. The App saves the values through Home Assistant Supervisor and restarts so the new choices become active. The API key is used only inside the App and is never sent to the browser or written to the model-discovery response.
 
 The ordinary App **Configuration** tab remains the source for endpoint URLs and the OpenAI API key. The model text fields remain in the schema for compatibility with existing installations, but the Ingress page is the recommended way to choose valid model IDs without typing them.
 
@@ -90,8 +90,8 @@ image_width: 1024
 image_height: 1024
 image_steps: 9
 
-# Optional Home Assistant SMTP delivery. Use the notify entity created by the
-# Home Assistant SMTP integration; leave email_notify_entity empty to disable.
+# Optional Home Assistant SMTP delivery. Use one or more notify entities created
+# by the Home Assistant SMTP integration; leave empty to disable.
 email_notify_entity: notify.moment_in_history_recipient
 email_camera_entity: camera.moment_in_history
 archive_images: false
@@ -110,9 +110,20 @@ The OpenAI path automatically tries the configured LAN image backend if the Open
 
 ### Optional email delivery
 
-Configure Home Assistant's built-in **SMTP** integration under **Settings → Devices & services → Add integration → SMTP**. Add one or more recipients there; Home Assistant creates a `notify.*` entity for each recipient. Put the desired entity ID in `email_notify_entity`, for example `notify.moment_in_history_recipient`. The App no longer stores SMTP hostnames, usernames, passwords, TLS settings, or recipient lists.
+Email delivery uses Home Assistant's built-in **SMTP** integration. The App does not install or configure SMTP automatically because the setup requires your sender address, SMTP host, port, encryption mode, credentials/app password, and recipient addresses. This is intentional: those values belong to Home Assistant and are not copied into the App.
+
+Set it up before enabling email delivery:
+
+1. Go to **Settings → Devices & services → Add integration → SMTP**.
+2. Enter the SMTP account details and complete the integration setup.
+3. Add one or more recipients to the SMTP integration. Home Assistant creates a `notify.*` entity for each recipient.
+4. Open **Moment in history → Info → Open Web UI**, refresh the model and notification lists, and select one or more SMTP recipient entities under **Email delivery**.
+
+The App also accepts a comma-separated list of recipient entity IDs, for example `notify.moment_in_history_recipient,notify.second_recipient`. The App no longer stores SMTP hostnames, usernames, passwords, TLS settings, or raw email addresses. If no recipient entity is selected, email delivery remains disabled.
 
 The App calls Home Assistant's `smtp.send_message` action only after the new PNG has been written and atomically moved into place. The message contains the event, “ten seconds before” text, source link, and the current dashboard image through `email_camera_entity`. If generation fails, no email is attempted. If email delivery fails after successful generation, the error is logged without discarding the generated image.
+
+Home Assistant's SMTP integration must be able to reach and authenticate to your mail provider. Its current action sends to the selected `notify.*` entities; adding multiple recipients targets each selected recipient. See the [Home Assistant SMTP documentation](https://www.home-assistant.io/integrations/smtp/) for provider-specific settings and recipient management.
 
 The supplied [email test script](examples/moment-in-history-email.yaml) reads the existing `event.json` using Home Assistant's `file.read_file` action. If both event text and the image camera are available, it sends them; during first-time setup it sends a generic setup message without an attachment. Add the script before adding its dashboard button. The File integration requires `/config/www/moment-in-history` in `homeassistant.allowlist_external_dirs`.
 

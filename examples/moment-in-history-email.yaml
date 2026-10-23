@@ -1,11 +1,12 @@
 # Home Assistant-side email test script.
 #
-# 1. Replace notify.moment_in_history_recipient with the notify entity created
+# 1. Configure Home Assistant's SMTP integration and add at least one recipient.
+# 2. Replace notify.moment_in_history_recipient with the notify entity created
 #    by Home Assistant's SMTP integration.
-# 2. Set the same entity ID in the App option email_notify_entity.
-# 3. Add /config/www/moment-in-history to homeassistant.allowlist_external_dirs
+# 3. Set the same entity ID in the App option email_notify_entity.
+# 4. Add /config/www/moment-in-history to homeassistant.allowlist_external_dirs
 #    before using file.read_file.
-# 4. Add this script to scripts.yaml or the script editor.
+# 5. Add this script to scripts.yaml or the script editor.
 
 script:
   moment_in_history_test_email:

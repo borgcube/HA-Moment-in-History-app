@@ -34,7 +34,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 POLL_INTERVAL_SECONDS = 30
 HOME_ASSISTANT_API_URL = os.environ.get(
     "HOME_ASSISTANT_API_URL", "http://supervisor/core/api"
@@ -101,6 +101,11 @@ ARCHIVE_IMAGES = _setting("MOMENT_ARCHIVE_IMAGES", "archive_images", "false").lo
     "on",
 }
 CONFIG_UI_PORT = int(_setting("MOMENT_CONFIG_UI_PORT", "config_ui_port", "8099"))
+
+
+def configured_notify_entities() -> list[str]:
+    """Parse one or more comma-separated Home Assistant notify entities."""
+    return [value.strip() for value in EMAIL_NOTIFY_ENTITY.split(",") if value.strip()]
 
 
 @dataclass(frozen=True)
@@ -548,7 +553,8 @@ def startup_report(mode: str) -> None:
 
 def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
     """Send the current image and readable event text through Home Assistant SMTP."""
-    if not EMAIL_NOTIFY_ENTITY:
+    notify_entities = configured_notify_entities()
+    if not notify_entities:
         return
     if not SUPERVISOR_TOKEN:
         raise RuntimeError("email_notify_entity is set but SUPERVISOR_TOKEN is unavailable")
@@ -558,7 +564,7 @@ def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
         raise RuntimeError(f"generated image is missing: {image_path}")
 
     payload = {
-        "entity_id": EMAIL_NOTIFY_ENTITY,
+        "entity_id": notify_entities[0] if len(notify_entities) == 1 else notify_entities,
         "title": f"Moment in history — {metadata['date_label']}",
         "message": (
             f"Moment in history — {metadata['date_label']}\n\n"
@@ -582,7 +588,7 @@ def send_event_email(metadata: dict[str, Any], image_path: Path) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.6",
+            "User-Agent": "BORGcube-MomentInHistory/1.8",
         },
         method="POST",
     )
@@ -600,7 +606,7 @@ def save_model_options(changes: dict[str, str]) -> None:
     if not SUPERVISOR_TOKEN:
         raise RuntimeError("SUPERVISOR_TOKEN is unavailable")
     options = _load_addon_options() or dict(ADDON_OPTIONS)
-    for field in config_ui.MODEL_FIELDS:
+    for field in config_ui.SELECTABLE_FIELDS:
         if field in changes:
             options[field] = changes[field]
     request = Request(
@@ -609,7 +615,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.7",
+            "User-Agent": "BORGcube-MomentInHistory/1.8",
         },
         method="POST",
     )
@@ -620,6 +626,11 @@ def save_model_options(changes: dict[str, str]) -> None:
         raise RuntimeError(f"Supervisor options update failed ({exc.code})") from exc
 
 
+def get_home_assistant_notify_entities() -> list[str]:
+    """Return current Home Assistant notify entities for the Ingress UI."""
+    return config_ui.home_assistant_notify_entities(HOME_ASSISTANT_API_URL, SUPERVISOR_TOKEN)
+
+
 def start_config_ui() -> None:
     """Start the Ingress-only model selection page."""
     try:
@@ -628,6 +639,7 @@ def start_config_ui() -> None:
             get_options=_load_addon_options,
             save_options=save_model_options,
             log=log,
+            get_notify_entities=get_home_assistant_notify_entities,
         )
         log(f"Configuration UI: Home Assistant Ingress listening on port {CONFIG_UI_PORT}")
     except OSError as exc:

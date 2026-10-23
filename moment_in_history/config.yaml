@@ -1,5 +1,5 @@
 name: Moment in history
-version: "1.7.0"
+version: "1.8.0"
 slug: moment_in_history
 description: Daily historical moment artwork for the Home Assistant dashboard
 startup: application
@@ -33,7 +33,7 @@ options:
   image_width: 1024
   image_height: 1024
   image_steps: 9
-  # Use the notify entity created by Home Assistant's SMTP integration.
+  # Use one or more comma-separated notify entities created by Home Assistant's SMTP integration.
   email_notify_entity: ""
   email_camera_entity: camera.moment_in_history
   archive_images: false
