@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.31 starting", report)
+            self.assertIn("Moment in history App 1.9.32 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -343,6 +343,23 @@ class ComfyUIImageProviderTest(unittest.TestCase):
         if content_type:
             response.headers.get_content_type.return_value = content_type
         return response
+
+    def test_image_prompt_does_not_leak_platform_metadata_into_artwork(self):
+        prompt = moment_in_history.build_image_prompt(
+            "People gather in tense silence before the decisive moment.",
+            date(2026, 10, 24),
+        )
+
+        self.assertNotIn("Home Assistant", prompt)
+        self.assertNotIn("1024", prompt)
+        self.assertIn("absolutely no visible writing or typography", prompt)
+
+    def test_comfyui_workflow_has_explicit_typography_negative_prompt(self):
+        workflow = moment_in_history.comfyui_workflow("A wordless historical scene", seed=1)
+
+        negative_prompt = workflow["6"]["inputs"]["text"]
+        self.assertIn("any text or typography", negative_prompt)
+        self.assertIn("pseudo-text", negative_prompt)
 
     def test_comfyui_provider_queues_workflow_and_downloads_png(self):
         queue_response = self._response(b'{"prompt_id":"prompt-1"}')

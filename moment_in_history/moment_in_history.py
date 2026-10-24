@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.31"
+APP_VERSION = "1.9.32"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -461,15 +461,12 @@ def post_json_with_fallback(path: str, payload: dict[str, Any], *, timeout: int 
 
 
 def build_image_prompt(pre_moment: str, day: date) -> str:
-    return f"""Use case: historical-scene.
-Asset type: daily Home Assistant dashboard artwork.
-Primary request: a wordless cinematic cartoon illustration of the exact moment ten seconds before a major historical event. Show only the tense anticipation and immediate setup, never the event itself or its aftermath.
-Scene direction (visual meaning only; never render these words): {pre_moment}
-Style/medium: clearly 2D cartoon illustration, clean ink outlines, cel shading, simplified stylized forms, dramatic high-contrast modern graphic-novel finish, epic composition, strong silhouette design, dynamic perspective, polished concept art. Avoid photorealism and photographic textures.
-Lighting/mood: bold directional lighting, deep shadows, luminous highlights, suspenseful anticipation.
-Composition/framing: square 1024x1024 composition, visually legible at dashboard-card size, one coherent scene, no collage.
-On-image text: none during generation. The date is composited separately after generation, so do not render any words, letters, numerals, signs, labels, captions, speech bubbles, logos, watermarks, documents, pages, books, newspapers, maps, screens, teleprompters, or any written surface. If the scene direction mentions a script or paper, show only the people and their body language with the writing surface out of frame or blank. Do not depict the event itself; depict only the instant immediately before it.
-Avoid: modern objects in historical scenes, anachronistic clothing, graphic gore, blurry faces, extra limbs, illegible pseudo-text, and duplicate subjects."""
+    return f"""Create one wordless cinematic 2D cartoon illustration of the exact moment ten seconds before a major historical event. Show only the tense anticipation and immediate setup, never the event itself or its aftermath.
+Scene direction: {pre_moment}
+Use clean ink outlines, cel shading, simplified stylized forms, dramatic high-contrast modern graphic-novel finish, epic composition, strong silhouette design, dynamic perspective, and polished concept-art quality. Avoid photorealism and photographic textures.
+Use bold directional lighting, deep shadows, luminous highlights, and suspenseful anticipation. Compose one coherent scene with no collage.
+The image must contain absolutely no visible writing or typography: no words, letters, numbers, numerals, captions, labels, logos, watermarks, signs, documents, pages, books, newspapers, maps, screens, speech bubbles, or blank writing surfaces. If the scene direction mentions a script or paper, show only the people and their body language with the writing surface out of frame. Do not depict the event itself; depict only the instant immediately before it.
+Avoid modern objects in historical scenes, anachronistic clothing, graphic gore, blurry faces, extra limbs, illegible pseudo-text, and duplicate subjects."""
 
 
 def post_image(url: str, payload: dict[str, Any], *, timeout: int = 1800) -> bytes:
@@ -508,8 +505,10 @@ def get_image(url: str, *, timeout: int = 1800) -> bytes:
 def comfyui_workflow(prompt: str, *, seed: int) -> dict[str, Any]:
     """Build the small API-format workflow used by the ComfyUI provider."""
     negative_prompt = (
-        "text, letters, words, numbers, captions, labels, logos, watermarks, "
-        "speech bubbles, documents, signs, blurry, low quality, distorted anatomy"
+        "any text or typography, words, letters, numbers, numerals, writing, captions, "
+        "labels, logos, watermarks, signs, speech bubbles, documents, pages, books, "
+        "newspapers, maps, screens, posters, menus, banners, readable symbols, "
+        "pseudo-text, blurry, low quality, distorted anatomy"
     )
     return {
         "3": {
