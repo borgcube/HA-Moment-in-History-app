@@ -4,5 +4,5 @@
 image_size: 1024x1024
 image_steps: 9
 archive_images: false
-run_on_startup: false
-generate_on_restart: false
+regenerate_today: false
+regenerate_on_startup: false

@@ -1,5 +1,5 @@
 name: Moment in history
-version: "1.9.29"
+version: "1.9.30"
 slug: moment_in_history
 description: Daily historical moment artwork for the Home Assistant dashboard
 startup: application
@@ -21,11 +21,11 @@ options:
   image_size: 1024x1024
   image_steps: 9
   archive_images: false
-  run_on_startup: false
-  generate_on_restart: false
+  regenerate_today: false
+  regenerate_on_startup: false
 schema:
   image_size: list(1024x1024|1536x1024|1024x1536)
   image_steps: int(1,50)
   archive_images: bool
-  run_on_startup: bool
-  generate_on_restart: bool
+  regenerate_today: bool
+  regenerate_on_startup: bool

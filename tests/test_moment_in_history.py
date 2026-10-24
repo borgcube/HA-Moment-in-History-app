@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.29 starting", report)
+            self.assertIn("Moment in history App 1.9.30 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -112,24 +112,40 @@ class EventPageRefreshTest(unittest.TestCase):
         self.assertTrue(any("Shutdown complete" in call.args[0] for call in log_mock.call_args_list))
         self.assertEqual(signal_mock.call_count, 4)
 
-    def test_restart_generation_is_disabled_by_default_but_schedule_remains_active(self):
-        with patch.object(moment_in_history, "GENERATE_ON_RESTART", False):
+    def test_startup_always_catches_up_after_the_schedule_when_today_is_missing(self):
+        with patch.object(moment_in_history, "REGENERATE_ON_STARTUP", False), \
+                patch.object(moment_in_history, "REGENERATE_TODAY", False):
             self.assertFalse(
                 moment_in_history.should_generate_today(
-                    None, date(2026, 10, 23), True, startup_pending=True
+                    date(2026, 10, 23), date(2026, 10, 23), True, startup_pending=True
                 )
             )
             self.assertTrue(
                 moment_in_history.should_generate_today(
-                    None, date(2026, 10, 23), True, startup_pending=False
+                    None, date(2026, 10, 23), True, startup_pending=True
+                )
+            )
+            self.assertFalse(
+                moment_in_history.should_generate_today(
+                    None, date(2026, 10, 23), False, startup_pending=True
                 )
             )
 
-    def test_restart_generation_can_be_enabled_explicitly(self):
-        with patch.object(moment_in_history, "GENERATE_ON_RESTART", True):
+    def test_regenerate_on_startup_replaces_an_existing_image(self):
+        with patch.object(moment_in_history, "REGENERATE_ON_STARTUP", True), \
+                patch.object(moment_in_history, "REGENERATE_TODAY", False):
             self.assertTrue(
                 moment_in_history.should_generate_today(
-                    None, date(2026, 10, 23), True, startup_pending=True
+                    date(2026, 10, 23), date(2026, 10, 23), False, startup_pending=True
+                )
+            )
+
+    def test_regenerate_today_is_a_one_shot_startup_request(self):
+        with patch.object(moment_in_history, "REGENERATE_ON_STARTUP", False), \
+                patch.object(moment_in_history, "REGENERATE_TODAY", True):
+            self.assertTrue(
+                moment_in_history.should_generate_today(
+                    date(2026, 10, 23), date(2026, 10, 23), False, startup_pending=True
                 )
             )
 

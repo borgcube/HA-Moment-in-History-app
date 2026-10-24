@@ -64,7 +64,7 @@ Enter or edit the primary and fallback Ollama API URLs in this page. Choose the 
 
 After installing the App from this GitHub repository, open its **Info** tab and enable **Auto update** if you want Home Assistant Supervisor to update it automatically. This setting belongs to Supervisor, not the App's `config.yaml`; do not add `auto_update` to the App options. Supervisor periodically reloads the App repository and updates when the repository contains a newer App version.
 
-Every code or configuration release must increment the `version` in `moment_in_history/config.yaml`. Supervisor preserves the App options and the generated files during an update. With `generate_on_restart: false`, the update restart will not request a new image.
+Every code or configuration release must increment the `version` in `moment_in_history/config.yaml`. Supervisor preserves the App options and the generated files during an update. With **Regenerate on startup** disabled, an update restart will not request an extra image when today's image already exists.
 
 ## App Configuration
 
@@ -75,8 +75,8 @@ The app's **Configuration** tab is intentionally small. It contains only setting
 | Image size | Dropdown with the OpenAI-compatible sizes `1024x1024`, `1536x1024`, and `1024x1536`. The selected dimensions are also used by local image backends. |
 | Image steps | Advanced local-backend control for ComfyUI diffusion sampling. OpenAI ignores it; leave the default unless the selected checkpoint needs another value. |
 | Archive images | Keeps dated copies under `/config/www/moment-in-history/archive/`; each image is approximately 2 MB. The Web UI links to an archive gallery. |
-| Run on startup | Allows the normal daily check when the app starts. |
-| Generate on restart | Generates immediately at startup, before the daily schedule. It is disabled by default to avoid unexpected image costs. |
+| Regenerate today's event | One-shot request for a fresh image for today's event. It resets automatically after a successful generation. |
+| Regenerate on startup | Creates a fresh image every time the app starts, even when today's image already exists. It is disabled by default because each restart consumes an image-generation credit. |
 
 Provider URLs, models, the OpenAI key, image quality, schedule time, email, and ComfyUI settings are configured in **Info → Open Web UI**. Existing installations keep their saved values and can edit them there without regenerating the current image. On the first 1.9.x start, any existing Web UI values are copied into the App's persistent data before the reduced App schema is applied.
 
@@ -129,7 +129,7 @@ Set **Archive images** to true in App Configuration to keep dated copies under `
 
 ### Restart and update behavior
 
-`generate_on_restart` defaults to `false`. An App update or restart keeps the Supervisor configuration and the generated files under `/config/www/moment-in-history/`; it does not request a new image. The normal daily schedule remains active. Set **Generate on restart** to true only when you intentionally want the App to generate immediately when its daemon starts. **Run on startup** controls whether the normal daily check is allowed during startup; it does not bypass the schedule.
+`regenerate_on_startup` defaults to `false`. An App update or restart keeps the Supervisor configuration and the generated files under `/config/www/moment-in-history/`; it does not request a new image when today's image already exists. The app always performs its normal startup schedule check: if the configured time has passed and today's image is missing, it generates the missed event automatically. Set **Regenerate today's event** to true for a one-time replacement of today's image; the app resets that option after generation succeeds. Set **Regenerate on startup** to true only when you intentionally want a fresh image on every app restart, including restarts where today's image already exists. The old `generate_on_restart` option is still read as a compatibility fallback for existing installations.
 
 ### Startup and runtime logging
 
@@ -219,7 +219,7 @@ The app writes these files under `/config/www/moment-in-history/`:
 
 ## Schedule and source fallback
 
-The app checks every 30 seconds and generates after `schedule_time` if today's generation has not completed. With `generate_on_restart` disabled, a restart before or after the scheduled time does not create an extra image; the next scheduled run handles the next daily generation. Britannica is attempted first. If it returns an anti-bot page, an HTTP error, or no parseable event list, the Wikimedia On This Day feed is used.
+The app checks every 30 seconds and generates after `schedule_time` if today's generation has not completed. A restart after the scheduled time automatically catches up when today's image is missing. **Regenerate on startup** overrides the normal daily guard and creates a fresh image even when today's image is already present. Britannica is attempted first. If it returns an anti-bot page, an HTTP error, or no parseable event list, the Wikimedia On This Day feed is used.
 
 ## Troubleshooting
 

@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.29"
+APP_VERSION = "1.9.30"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.29",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.30",
         },
     )
     try:
@@ -207,8 +207,18 @@ IMAGE_WIDTH, IMAGE_HEIGHT = _image_dimensions(OPENAI_IMAGE_SIZE)
 IMAGE_STEPS = int(_setting("MOMENT_IMAGE_STEPS", "image_steps", "9"))
 IMAGE_URL = _setting("MOMENT_IMAGE_URL", "image_url", "/local/moment-in-history/moment-in-history.png")
 SCHEDULE_TIME = _setting("MOMENT_SCHEDULE_TIME", "schedule_time", "00:05")
-GENERATE_ON_RESTART = _setting("MOMENT_GENERATE_ON_RESTART", "generate_on_restart", "false").lower() in {"1", "true", "yes", "on"}
-RUN_ON_STARTUP = _setting("MOMENT_RUN_ON_STARTUP", "run_on_startup", "false").lower() in {"1", "true", "yes", "on"}
+_LEGACY_GENERATE_ON_RESTART = _setting("MOMENT_GENERATE_ON_RESTART", "generate_on_restart", "false")
+REGENERATE_ON_STARTUP = _setting(
+    "MOMENT_REGENERATE_ON_STARTUP",
+    "regenerate_on_startup",
+    _LEGACY_GENERATE_ON_RESTART,
+).lower() in {"1", "true", "yes", "on"}
+REGENERATE_TODAY = _setting("MOMENT_REGENERATE_TODAY", "regenerate_today", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 EMAIL_NOTIFY_ENTITY = _setting("EMAIL_NOTIFY_ENTITY", "email_notify_entity", "").strip()
 EMAIL_CAMERA_ENTITY = _setting(
     "EMAIL_CAMERA_ENTITY", "email_camera_entity", "camera.moment_in_history"
@@ -967,8 +977,8 @@ def startup_report(mode: str) -> None:
     log(f"Moment in history App {APP_VERSION} starting (mode={mode})")
     log(
         f"Runtime ready: timezone={TIME_ZONE.key}, poll_interval={POLL_INTERVAL_SECONDS}s, "
-        f"schedule_time={SCHEDULE_TIME}, run_on_startup={RUN_ON_STARTUP}, "
-        f"generate_on_restart={GENERATE_ON_RESTART}"
+        f"schedule_time={SCHEDULE_TIME}, regenerate_today={REGENERATE_TODAY}, "
+        f"regenerate_on_startup={REGENERATE_ON_STARTUP}"
     )
     log(
         f"Text service configured: primary={endpoint_host(OLLAMA_BASE_URL)} "
@@ -1006,7 +1016,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.29",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.30",
         },
         method="POST",
     )
@@ -1178,7 +1188,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.29",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.30",
         },
         method="POST",
     )
@@ -1187,6 +1197,39 @@ def save_model_options(changes: dict[str, str]) -> None:
             response.read()
     except HTTPError as exc:
         raise RuntimeError(f"Supervisor options update failed ({exc.code})") from exc
+
+
+def clear_regenerate_today_request() -> None:
+    """Consume the one-shot regenerate-today option after a successful generation."""
+    global REGENERATE_TODAY
+    if not REGENERATE_TODAY:
+        return
+    REGENERATE_TODAY = False
+    if not SUPERVISOR_TOKEN:
+        log("Regenerate today's event completed, but the one-shot option could not be reset: Supervisor API unavailable")
+        return
+
+    options = dict(config_ui.DEFAULT_WEB_OPTIONS)
+    options.update(_load_addon_options())
+    options.update(SUPERVISOR_OPTIONS)
+    options.update(PERSISTED_WEB_OPTIONS)
+    options["regenerate_today"] = False
+    request = Request(
+        "http://supervisor/addons/self/options",
+        data=json.dumps({"options": options}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+            "Content-Type": "application/json",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.30",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            response.read()
+        log("Regenerate today's event request reset after successful generation")
+    except Exception as exc:  # noqa: BLE001 - generation already succeeded
+        log(f"Regenerate today's event was generated, but its one-shot option could not be reset: {type(exc).__name__}")
 
 
 def get_home_assistant_notify_entities() -> list[str]:
@@ -1448,12 +1491,13 @@ def should_generate_today(
     startup_pending: bool,
 ) -> bool:
     """Decide whether this loop may generate without changing stored config."""
+    if startup_pending and (REGENERATE_TODAY or REGENERATE_ON_STARTUP):
+        return True
     if generated_date == today:
         return False
-    if startup_pending:
-        if GENERATE_ON_RESTART:
-            return True
-        return RUN_ON_STARTUP and schedule_reached
+    # Startup always performs the normal schedule catch-up check. There is no
+    # separate opt-in: a restart after today's schedule must not leave the day
+    # without an image.
     return schedule_reached
 
 
@@ -1464,6 +1508,7 @@ def request_shutdown(_signum: int, _frame: Any) -> None:
 
 def daemon() -> int:
     """Run inside the HA add-on and keep the daily asset current."""
+    global REGENERATE_TODAY
     SHUTDOWN_EVENT.clear()
     previous_handlers = {
         signal.SIGTERM: signal.getsignal(signal.SIGTERM),
@@ -1504,12 +1549,15 @@ def daemon() -> int:
             schedule_reached = now.strftime("%H:%M") >= SCHEDULE_TIME
             should_run = should_generate_today(generated_date, today, schedule_reached, startup_pending)
             if not initial_status_logged:
-                if generated_date == today:
+                if startup_pending and (REGENERATE_TODAY or REGENERATE_ON_STARTUP):
+                    reason = "today's event was requested" if REGENERATE_TODAY else "regenerate_on_startup is enabled"
+                    log(f"Startup state: creating a fresh image because {reason}")
+                elif generated_date == today:
                     log(f"Startup state: today's image is already present ({today.isoformat()}); no generation needed")
-                elif startup_pending and not GENERATE_ON_RESTART:
+                elif schedule_reached:
                     log(
-                        f"Startup state: today's image is not present; restart generation is disabled; "
-                        f"waiting for schedule_time={SCHEDULE_TIME}"
+                        f"Startup state: today's image is not present and schedule_time={SCHEDULE_TIME} "
+                        "has passed; generating the missed daily event"
                     )
                 elif not schedule_reached:
                     log(f"Startup state: waiting for schedule_time={SCHEDULE_TIME}; current_time={now.strftime('%H:%M')}")
@@ -1523,6 +1571,7 @@ def daemon() -> int:
                         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
                         generate(today)
                         marker_path.write_text(today.isoformat() + "\n", encoding="utf-8")
+                        clear_regenerate_today_request()
                 except Exception as exc:  # noqa: BLE001 - daemon logs and retries
                     log(f"Daily generation failed: {exc}")
             startup_pending = False

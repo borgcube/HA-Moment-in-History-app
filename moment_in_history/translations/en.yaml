@@ -8,9 +8,9 @@ configuration:
   archive_images:
     name: Archive images
     description: Keep dated PNG copies under the archive folder. Each image is approximately 2 MB.
-  run_on_startup:
-    name: Run on startup
-    description: Allow the normal daily check when the app starts. It still waits for the configured daily schedule unless Generate on restart is enabled.
-  generate_on_restart:
-    name: Generate on restart
-    description: Generate immediately when the app starts, even before the daily schedule. Disabled by default to avoid unexpected image costs.
+  regenerate_today:
+    name: Regenerate today's event
+    description: Request one fresh image for today's event. The option resets automatically after a successful generation.
+  regenerate_on_startup:
+    name: Regenerate on startup
+    description: Create a fresh image every time the app starts, even when today's image already exists. This uses an image-generation credit on each startup.
