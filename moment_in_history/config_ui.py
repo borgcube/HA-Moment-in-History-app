@@ -76,7 +76,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.23",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.24",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -1623,7 +1623,9 @@ def _page() -> str:
     const openaiKey = document.getElementById('openai-key').value;
     if (openaiKey) values.openai_api_key = openaiKey;
     values.clear_openai_key = document.getElementById('clear-openai-key').checked;
-    if (!emailEnabled.checked) values.email_notify_entity = '';
+    values.email_notify_entity = emailEnabled.checked
+      ? Array.from(emailEntity.selectedOptions).map(function (option) { return option.value; }).filter(Boolean).join(',')
+      : '';
     try {
       const response = await fetch(apiPath('api/config'), {
         method: 'POST',

@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.23 starting", report)
+            self.assertIn("Moment in history App 1.9.24 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -1143,6 +1143,7 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="schedule-time"', page)
             self.assertIn('id="email-camera-entity"', page)
             self.assertIn('id="save" type="button">Save configuration', page)
+            self.assertIn("values.email_notify_entity = emailEnabled.checked", page)
             self.assertIn("Fallback local image API / ComfyUI URL", page)
             self.assertIn('id="comfyui-model-options"', page)
             self.assertIn("dirtyFields", page)
