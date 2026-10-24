@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.27"
+APP_VERSION = "1.9.28"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.27",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.28",
         },
     )
     try:
@@ -770,7 +770,42 @@ def _archive_entries() -> list[dict[str, str]]:
                 "path": f"archive/{relative}",
             }
         )
+        metadata_path = path.with_suffix(".json")
+        if metadata_path.is_file():
+            entries[-1]["metadata_path"] = f"archive/{metadata_path.relative_to(ARCHIVE_DIR).as_posix()}"
     return sorted(entries, key=lambda item: item["date"], reverse=True)
+
+
+def archive_event_metadata(target_day: date) -> None:
+    """Keep the educational event text beside an archived image."""
+    try:
+        metadata = json.loads(EVENT_JSON_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(metadata, dict):
+        return
+    fields = (
+        "date",
+        "date_label",
+        "event",
+        "title",
+        "year",
+        "description",
+        "pre_moment",
+        "selection_reason",
+        "source",
+        "source_url",
+        "generated_at",
+    )
+    archived = {field: metadata[field] for field in fields if field in metadata}
+    archived["date"] = target_day.isoformat()
+    metadata_path = ARCHIVE_DIR / f"{target_day.year:04d}" / f"{target_day.month:02d}" / f"{target_day.isoformat()}.json"
+    temporary_path = metadata_path.with_suffix(".tmp.json")
+    temporary_path.write_text(
+        json.dumps(archived, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary_path, metadata_path)
 
 
 def write_archive_viewer() -> None:
@@ -834,19 +869,58 @@ def write_archive_viewer() -> None:
       return;
     }
     entries.forEach(function (entry) {
-      const card = document.createElement('a');
+      const card = document.createElement('article');
       card.className = 'card';
-      card.href = entry.path;
-      card.target = '_blank';
-      card.rel = 'noreferrer';
+      const imageLink = document.createElement('a');
+      imageLink.href = entry.path;
+      imageLink.target = '_blank';
+      imageLink.rel = 'noreferrer';
       const image = document.createElement('img');
       image.loading = 'lazy';
       image.src = entry.path;
       image.alt = 'Moment in history — ' + entry.date_label;
+      imageLink.appendChild(image);
       const label = document.createElement('time');
       label.dateTime = entry.date;
       label.textContent = entry.date_label;
-      card.append(image, label);
+      card.append(imageLink, label);
+      if (entry.metadata_path) {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = 'Show event details';
+        details.appendChild(summary);
+        details.addEventListener('toggle', async function () {
+          if (!details.open || details.dataset.loaded) return;
+          details.dataset.loaded = 'true';
+          try {
+            const metadataResponse = await fetch(entry.metadata_path + '?refresh=' + Date.now(), { cache: 'no-store' });
+            if (!metadataResponse.ok) throw new Error('event details request failed');
+            const metadata = await metadataResponse.json();
+            const event = document.createElement('p');
+            event.innerHTML = '<strong>Event:</strong> ';
+            event.append(document.createTextNode(metadata.event || metadata.title || ''));
+            const preMoment = document.createElement('p');
+            preMoment.innerHTML = '<strong>Ten seconds before:</strong> ';
+            preMoment.append(document.createTextNode(metadata.pre_moment || ''));
+            const context = document.createElement('p');
+            context.textContent = metadata.description || '';
+            details.append(event, preMoment, context);
+            if (metadata.source_url) {
+              const source = document.createElement('a');
+              source.href = metadata.source_url;
+              source.target = '_blank';
+              source.rel = 'noreferrer';
+              source.textContent = 'Source: ' + (metadata.source || metadata.source_url);
+              details.appendChild(source);
+            }
+          } catch (error) {
+            const failure = document.createElement('p');
+            failure.textContent = 'Event details are unavailable for this archived image.';
+            details.appendChild(failure);
+          }
+        });
+        card.appendChild(details);
+      }
       gallery.appendChild(card);
     });
   } catch (error) {
@@ -932,7 +1006,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.27",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.28",
         },
         method="POST",
     )
@@ -1104,7 +1178,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.27",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.28",
         },
         method="POST",
     )
@@ -1274,6 +1348,10 @@ def archive_image(target_day: date) -> None:
     size_mib = archive_path.stat().st_size / (1024 * 1024)
     log(f"Archived {target_day.isoformat()} image to {archive_path} ({size_mib:.2f} MiB)")
     try:
+        archive_event_metadata(target_day)
+    except OSError as exc:
+        log(f"Archive event details update failed: {exc}")
+    try:
         write_archive_viewer()
     except OSError as exc:
         log(f"Archive viewer update failed: {exc}")
@@ -1402,6 +1480,18 @@ def daemon() -> int:
         initial_status_logged = False
         try:
             write_archive_viewer()
+            if ARCHIVE_IMAGES and IMAGE_PATH.is_file():
+                try:
+                    existing_date = date.fromisoformat(
+                        marker_path.read_text(encoding="utf-8").strip()
+                    )
+                except (OSError, ValueError):
+                    existing_date = None
+                if existing_date:
+                    existing_archive = ARCHIVE_DIR / f"{existing_date.year:04d}" / f"{existing_date.month:02d}" / f"{existing_date.isoformat()}.png"
+                    existing_metadata = existing_archive.with_suffix(".json")
+                    if not existing_archive.is_file() or not existing_metadata.is_file():
+                        archive_image(existing_date)
         except OSError as exc:
             log(f"Archive viewer unavailable: {exc}")
         while not SHUTDOWN_EVENT.is_set():
