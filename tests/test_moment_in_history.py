@@ -18,6 +18,18 @@ import moment_in_history  # noqa: E402
 import config_ui  # noqa: E402
 
 
+class AppMetadataTest(unittest.TestCase):
+    def test_home_assistant_changelog_is_kept_in_the_app_directory(self):
+        repository_root = Path(__file__).resolve().parents[1]
+        app_changelog = repository_root / "moment_in_history" / "CHANGELOG.md"
+
+        self.assertTrue(app_changelog.is_file())
+        self.assertFalse((repository_root / "CHANGELOG.md").exists())
+        changelog = app_changelog.read_text(encoding="utf-8")
+        self.assertIn("## 1.9.35 — 2026-10-24", changelog)
+        self.assertIn("Home Assistant can now show the app's release history", changelog)
+
+
 class EventPageRefreshTest(unittest.TestCase):
     def test_log_writes_file_and_supervisor_stdout(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -46,7 +58,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.34 starting", report)
+            self.assertIn("Moment in history App 1.9.35 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)

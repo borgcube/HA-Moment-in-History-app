@@ -6,6 +6,17 @@ Release notes focus on why an existing user should upgrade and call out any acti
 
 Add user-visible changes here during development, then move them into a versioned section when `moment_in_history/config.yaml` is bumped.
 
+## 1.9.35 — 2026-10-24
+
+### Why upgrade
+
+Home Assistant can now show the app's release history directly in the Update panel, so users can see why a new version is worth installing.
+
+### Changed
+
+- Moved the changelog into the app directory where Home Assistant Supervisor expects it.
+- Bumped the app version to 1.9.35 so the corrected metadata is picked up as an available update.
+
 ## 1.9.34 — 2026-10-24
 
 ### Why upgrade
