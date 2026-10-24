@@ -6,6 +6,8 @@ This repository is a Home Assistant App repository. The root `repository.yaml` i
 
 The project is packaged as a Home Assistant App (formerly called an add-on). It keeps the orchestration and generated files on Home Assistant, uses Ollama for event selection and pre-event scene direction, and supports OpenAI Images or a LAN image service for the artwork.
 
+See the [changelog](CHANGELOG.md) for release benefits, behavior changes, and upgrade actions.
+
 ## Features
 
 - Britannica is attempted first for the daily event list, with Wikimedia's machine-readable On This Day feed as a fallback when Britannica is unavailable.

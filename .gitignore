@@ -13,6 +13,7 @@ event.json
 event.html
 moment-in-history.png
 *.png
+!moment_in_history/icon.png
 
 # Local Home Assistant and editor files
 .storage/

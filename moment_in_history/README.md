@@ -2,6 +2,8 @@
 
 Moment in history generates one historical scene each day and writes the current image and event details under `/config/www/moment-in-history/`.
 
+See the [release changelog](../CHANGELOG.md) for upgrade benefits and behavior changes.
+
 ## Install
 
 For the normal Home Assistant OS or Supervised installation:
