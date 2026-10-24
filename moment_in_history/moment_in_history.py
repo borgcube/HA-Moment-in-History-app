@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.32"
+APP_VERSION = "1.9.33"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -460,13 +460,16 @@ def post_json_with_fallback(path: str, payload: dict[str, Any], *, timeout: int 
     raise RuntimeError(f"All Ollama endpoints failed for {path}: {last_error}")
 
 
-def build_image_prompt(pre_moment: str, day: date) -> str:
-    return f"""Create one wordless cinematic 2D cartoon illustration of the exact moment ten seconds before a major historical event. Show only the tense anticipation and immediate setup, never the event itself or its aftermath.
-Scene direction: {pre_moment}
-Use clean ink outlines, cel shading, simplified stylized forms, dramatic high-contrast modern graphic-novel finish, epic composition, strong silhouette design, dynamic perspective, and polished concept-art quality. Avoid photorealism and photographic textures.
-Use bold directional lighting, deep shadows, luminous highlights, and suspenseful anticipation. Compose one coherent scene with no collage.
-The image must contain absolutely no visible writing or typography: no words, letters, numbers, numerals, captions, labels, logos, watermarks, signs, documents, pages, books, newspapers, maps, screens, speech bubbles, or blank writing surfaces. If the scene direction mentions a script or paper, show only the people and their body language with the writing surface out of frame. Do not depict the event itself; depict only the instant immediately before it.
-Avoid modern objects in historical scenes, anachronistic clothing, graphic gore, blurry faces, extra limbs, illegible pseudo-text, and duplicate subjects."""
+def build_image_prompt(pre_moment: str, day: date, event_text: str = "") -> str:
+    event_context = event_text.strip() or "the specific historical event described by the scene direction"
+    return f"""Create one single full-bleed, highly detailed cinematic 2D illustration of a specific historical scene. Show the final ten seconds before the historical event below; the event is context only and must not be shown happening:
+{event_context}
+
+Scene direction (authoritative visual brief): {pre_moment}
+Make the countdown unmistakable rather than generic: show one clear imminent physical action or trigger that is about to happen, such as a hand reaching the decisive object, a door or mechanism just beginning to move, a person taking the final step, or a crowd reacting to an approaching figure. Every visible person must have a purposeful posture, gesture, or gaze connected to that focal action. Do not depict a posed group, a passive gathering, or people merely standing symmetrically around an empty space.
+Build a layered foreground, middle ground, and background with a strong focal point, varied scale, expressive faces and hands, authentic period clothing, historically plausible materials, specific architecture or landscape, tactile surfaces, atmospheric depth, and small environmental details that make the place and instant feel real. Use cinematic camera framing and directional light to guide the eye toward what is about to happen. Show anticipation, interruption, restraint, and cause-and-effect; do not show the completed event or its aftermath.
+Use clean ink outlines, cel shading, simplified stylized forms, dramatic high-contrast modern graphic-novel finish, strong silhouette design, dynamic perspective, and polished concept-art quality. Avoid photorealism and photographic textures. Compose one coherent scene with no collage, poster layout, title card, decorative border, or empty text area.
+The image must contain absolutely no visible writing or typography: no words, letters, numbers, numerals, captions, labels, logos, watermarks, signs, documents, pages, books, newspapers, maps, screens, speech bubbles, or blank writing surfaces. Do not copy the event description or add any title. If the scene direction mentions a script or paper, show only the people and their body language with the writing surface out of frame. Avoid modern objects in historical scenes, anachronistic clothing, graphic gore, blurry faces, extra limbs, illegible pseudo-text, and duplicate subjects."""
 
 
 def post_image(url: str, payload: dict[str, Any], *, timeout: int = 1800) -> bytes:
@@ -508,7 +511,9 @@ def comfyui_workflow(prompt: str, *, seed: int) -> dict[str, Any]:
         "any text or typography, words, letters, numbers, numerals, writing, captions, "
         "labels, logos, watermarks, signs, speech bubbles, documents, pages, books, "
         "newspapers, maps, screens, posters, menus, banners, readable symbols, "
-        "pseudo-text, blurry, low quality, distorted anatomy"
+        "pseudo-text, title card, advertisement, user interface, decorative border, "
+        "generic crowd, posed group portrait, passive waiting, symmetrical tableau, "
+        "people merely standing, empty center, blurry, low quality, distorted anatomy"
     )
     return {
         "3": {
@@ -1410,7 +1415,7 @@ def generate(target_day: date) -> None:
         source_status = "Wikimedia fallback after Britannica attempt"
 
     selected, selection_reason = choose_event(events)
-    pre_moment_prompt = f"Describe in exactly one vivid sentence of no more than 35 words the scene exactly ten seconds before this event, without depicting the event itself. Treat the supplied event as authoritative; do not add corrections, caveats, or commentary. Mention only people, setting, lighting, atmosphere, and non-text-bearing physical objects. Do not mention paper, pages, scripts, screens, signs, labels, logos, or writing: {selected.text}"
+    pre_moment_prompt = f"Write a vivid, filmable visual brief of 60 to 90 words in 2 or 3 sentences for the exact ten seconds before this event. Treat the supplied event as authoritative context, but do not describe the event happening or its aftermath. Specify the historically appropriate location, period, lighting or weather, focal subject, up to five people's distinct posture/gaze/gesture, meaningful physical objects, and one immediate physical cue that proves the action is about to begin. Make the scene event-specific and causal, never a generic crowd or posed gathering. Mention only visible people, setting, light, atmosphere, and non-text-bearing physical objects. Do not mention paper, pages, scripts, screens, signs, labels, logos, or writing. Event: {selected.text}"
     try:
         pre_payload = {
             "model": TEXT_MODEL,
@@ -1425,7 +1430,7 @@ def generate(target_day: date) -> None:
         pre_moment = "The setting holds in tense anticipation, with every detail poised for what is about to happen."
 
     date_label = f"{target_day.day} {target_day.strftime('%B %Y')}"
-    prompt = build_image_prompt(pre_moment, target_day)
+    prompt = build_image_prompt(pre_moment, target_day, selected.text)
     temp_image = ROOT / f"moment-in-history-{int(time.time())}.png"
     image_backend_used = run_image_model(prompt, temp_image)
     overlay_date(temp_image, date_label)
