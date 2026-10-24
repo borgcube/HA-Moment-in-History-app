@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.26 starting", report)
+            self.assertIn("Moment in history App 1.9.27 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -418,12 +418,40 @@ class ComfyUIImageProviderTest(unittest.TestCase):
             image_path.write_bytes(b"fake png")
             with patch.object(moment_in_history, "ROOT", root), \
                     patch.object(moment_in_history, "IMAGE_PATH", image_path), \
+                    patch.object(moment_in_history, "ARCHIVE_DIR", root / "archive"), \
                     patch.object(moment_in_history, "ARCHIVE_IMAGES", True), \
-                    patch.object(moment_in_history, "LOG_PATH", root / "generation.log"):
+                    patch.object(moment_in_history, "LOG_PATH", root / "generation.log"), \
+                    patch.object(moment_in_history, "write_archive_viewer") as viewer:
                 moment_in_history.archive_image(date(2026, 10, 23))
 
             archived = root / "archive" / "2026" / "10" / "2026-10-23.png"
             self.assertEqual(archived.read_bytes(), b"fake png")
+            viewer.assert_called_once_with()
+
+    def test_archive_viewer_indexes_valid_images_newest_first(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive_dir = root / "archive"
+            (archive_dir / "2026" / "10").mkdir(parents=True)
+            (archive_dir / "2026" / "09").mkdir(parents=True)
+            (archive_dir / "2026" / "10" / "2026-10-23.png").write_bytes(b"new")
+            (archive_dir / "2026" / "09" / "2026-09-30.png").write_bytes(b"old")
+            (archive_dir / "not-an-entry.png").write_bytes(b"ignore")
+            index_path = archive_dir / "index.json"
+            html_path = root / "archive.html"
+            with patch.object(moment_in_history, "ARCHIVE_DIR", archive_dir), \
+                    patch.object(moment_in_history, "ARCHIVE_INDEX_PATH", index_path), \
+                    patch.object(moment_in_history, "ARCHIVE_HTML_PATH", html_path), \
+                    patch.object(moment_in_history, "ARCHIVE_IMAGES", True):
+                moment_in_history.write_archive_viewer()
+
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            self.assertTrue(payload["archive_enabled"])
+            self.assertEqual(
+                [entry["date"] for entry in payload["entries"]],
+                ["2026-10-23", "2026-09-30"],
+            )
+            self.assertIn("archive/index.json", html_path.read_text(encoding="utf-8"))
 
     def test_managed_email_mapping_removes_only_the_selected_smtp_subentry(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1157,6 +1185,7 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="primary-url-input"', page)
             self.assertIn('id="fallback-url-input"', page)
             self.assertIn("'primary-model', 'fallback-model'", page)
+            self.assertIn('href="/local/moment-in-history/archive.html"', page)
             self.assertIn('id="image-provider"', page)
             self.assertIn('id="openai-key"', page)
             self.assertIn('id="schedule-time"', page)

@@ -76,7 +76,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.26",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.27",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -1053,6 +1053,7 @@ def _page() -> str:
 <main>
   <h1>Moment in history — configuration</h1>
   <p>This is the app’s configuration page. Home Assistant App Configuration contains only the core image and restart controls. Configure providers, models, schedules, and email here; changes are saved through Home Assistant and restart the app without generating an image unless you explicitly enable that option.</p>
+  <p class="hint"><a href="/local/moment-in-history/archive.html" target="_blank" rel="noreferrer">Browse archived images</a> — dated thumbnails are available when Archive images is enabled.</p>
 
   <section>
     <h2>Text and event selection</h2>

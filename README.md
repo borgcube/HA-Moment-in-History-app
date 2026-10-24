@@ -74,7 +74,7 @@ The app's **Configuration** tab is intentionally small. It contains only setting
 | --- | --- |
 | Image size | Dropdown with the OpenAI-compatible sizes `1024x1024`, `1536x1024`, and `1024x1536`. The selected dimensions are also used by local image backends. |
 | Image steps | Advanced local-backend control for ComfyUI diffusion sampling. OpenAI ignores it; leave the default unless the selected checkpoint needs another value. |
-| Archive images | Keeps dated copies under `/config/www/moment-in-history/archive/`; each image is approximately 2 MB. |
+| Archive images | Keeps dated copies under `/config/www/moment-in-history/archive/`; each image is approximately 2 MB. The Web UI links to an archive gallery. |
 | Run on startup | Allows the normal daily check when the app starts. |
 | Generate on restart | Generates immediately at startup, before the daily schedule. It is disabled by default to avoid unexpected image costs. |
 
@@ -125,7 +125,7 @@ homeassistant:
 
 ### Optional image archive
 
-Set **Archive images** to true in App Configuration to keep dated copies under `/config/www/moment-in-history/archive/YYYY/MM/`. Archiving is disabled by default so updates do not consume extra storage unexpectedly. A generated PNG is typically about **2 MB**, so archiving costs approximately 2 MB per day, or about 60 MB per 30-day month. The App logs the actual size of every archived image.
+Set **Archive images** to true in App Configuration to keep dated copies under `/config/www/moment-in-history/archive/YYYY/MM/`. Open **Info → Open Web UI → Browse archived images** to view the dated thumbnail gallery; each thumbnail opens the full PNG. Archiving is disabled by default so updates do not consume extra storage unexpectedly. A generated PNG is typically about **2 MB**, so archiving costs approximately 2 MB per day, or about 60 MB per 30-day month. The App logs the actual size of every archived image.
 
 ### Restart and update behavior
 
@@ -212,6 +212,8 @@ The app writes these files under `/config/www/moment-in-history/`:
 | `event.json` | Current structured event metadata |
 | `event.html` | Plain-text disclosure page |
 | `generation.log` | Daily generation log |
+| `archive.html` | Image archive gallery |
+| `archive/index.json` | Archive gallery index |
 | `archive/YYYY/MM/YYYY-MM-DD.png` | Optional dated image archive |
 
 ## Schedule and source fallback

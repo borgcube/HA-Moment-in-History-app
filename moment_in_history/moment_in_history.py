@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.26"
+APP_VERSION = "1.9.27"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.26",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.27",
         },
     )
     try:
@@ -152,6 +152,9 @@ ROOT = Path(_setting("MOMENT_ROOT", "root", "/config/www/moment-in-history"))
 IMAGE_PATH = ROOT / "moment-in-history.png"
 EVENT_JSON_PATH = ROOT / "event.json"
 EVENT_HTML_PATH = ROOT / "event.html"
+ARCHIVE_DIR = ROOT / "archive"
+ARCHIVE_INDEX_PATH = ARCHIVE_DIR / "index.json"
+ARCHIVE_HTML_PATH = ROOT / "archive.html"
 LOCK_PATH = ROOT / ".generation.lock"
 LOG_PATH = ROOT / "generation.log"
 
@@ -742,6 +745,122 @@ def write_event_pages(metadata: dict[str, Any]) -> None:
 """,
         encoding="utf-8",
     )
+
+
+def _archive_entries() -> list[dict[str, str]]:
+    """Return valid archived image paths in newest-first order."""
+    entries: list[dict[str, str]] = []
+    if not ARCHIVE_DIR.exists():
+        return entries
+    for path in ARCHIVE_DIR.glob("*/*/*.png"):
+        relative = path.relative_to(ARCHIVE_DIR).as_posix()
+        match = re.fullmatch(r"(\d{4})/(\d{2})/(\d{4}-\d{2}-\d{2})\.png", relative)
+        if not match:
+            continue
+        try:
+            archive_day = date.fromisoformat(match.group(3))
+        except ValueError:
+            continue
+        if archive_day.year != int(match.group(1)) or archive_day.month != int(match.group(2)):
+            continue
+        entries.append(
+            {
+                "date": archive_day.isoformat(),
+                "date_label": f"{archive_day.day} {archive_day.strftime('%B %Y')}",
+                "path": f"archive/{relative}",
+            }
+        )
+    return sorted(entries, key=lambda item: item["date"], reverse=True)
+
+
+def write_archive_viewer() -> None:
+    """Publish a static gallery page and index for the optional image archive."""
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    entries = _archive_entries()
+    ARCHIVE_INDEX_PATH.write_text(
+        json.dumps({"archive_enabled": ARCHIVE_IMAGES, "entries": entries}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    ARCHIVE_HTML_PATH.write_text(
+        """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>Moment in history — archive</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #111827; color: #f3f4f6; }
+    main { max-width: 1200px; margin: auto; padding: 24px; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 1.55rem; }
+    a { color: #f0c46a; }
+    .hint { color: #9ca3af; }
+    .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-top: 20px; }
+    .card { display: block; padding: 0 0 10px; overflow: hidden; border: 1px solid #374151; border-radius: 10px; background: #1f2937; color: #f9fafb; text-decoration: none; }
+    .card:hover { border-color: #d9a441; }
+    .card img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: #030712; }
+    .card time { display: block; padding: 10px 12px 0; font-weight: 700; }
+    .empty { padding: 24px; border: 1px dashed #4b5563; border-radius: 10px; color: #d1d5db; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Moment in history — archive</h1>
+    <a href="./moment-in-history.png">View current image</a>
+  </header>
+  <p class="hint" id="status">Loading archived images…</p>
+  <section class="gallery" id="gallery" aria-live="polite"></section>
+</main>
+<script>
+(async function () {
+  const status = document.getElementById('status');
+  const gallery = document.getElementById('gallery');
+  try {
+    const response = await fetch('./archive/index.json?refresh=' + Date.now(), { cache: 'no-store' });
+    if (!response.ok) throw new Error('archive index request failed');
+    const data = await response.json();
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    status.textContent = data.archive_enabled
+      ? (entries.length ? entries.length + ' archived image' + (entries.length === 1 ? '' : 's') : 'No archived images yet.')
+      : 'Image archiving is disabled. Enable Archive images in App Configuration to keep dated copies.';
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = data.archive_enabled ? 'The first archived image will appear after the next successful generation.' : status.textContent;
+      gallery.appendChild(empty);
+      return;
+    }
+    entries.forEach(function (entry) {
+      const card = document.createElement('a');
+      card.className = 'card';
+      card.href = entry.path;
+      card.target = '_blank';
+      card.rel = 'noreferrer';
+      const image = document.createElement('img');
+      image.loading = 'lazy';
+      image.src = entry.path;
+      image.alt = 'Moment in history — ' + entry.date_label;
+      const label = document.createElement('time');
+      label.dateTime = entry.date;
+      label.textContent = entry.date_label;
+      card.append(image, label);
+      gallery.appendChild(card);
+    });
+  } catch (error) {
+    status.textContent = 'Unable to load the image archive.';
+  }
+}());
+</script>
+</body>
+</html>
+""",
+        encoding="utf-8",
+    )
+
+
 def log(message: str) -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     line = f"{datetime.now(TIME_ZONE).isoformat()} {message}"
@@ -796,7 +915,7 @@ def startup_report(mode: str) -> None:
         log("Image archive: disabled; enable archive_images to retain approximately 2 MB per image")
     log(
         f"Output ready: root={ROOT}, image={IMAGE_PATH.name}, metadata={EVENT_JSON_PATH.name}, "
-        f"disclosure={EVENT_HTML_PATH.name}, log={LOG_PATH.name}"
+        f"disclosure={EVENT_HTML_PATH.name}, archive_viewer={ARCHIVE_HTML_PATH.name}, log={LOG_PATH.name}"
     )
     if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", SCHEDULE_TIME):
         log(f"Startup warning: schedule_time={SCHEDULE_TIME!r} is not valid HH:MM")
@@ -813,7 +932,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.26",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.27",
         },
         method="POST",
     )
@@ -985,7 +1104,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.26",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.27",
         },
         method="POST",
     )
@@ -1147,13 +1266,17 @@ def archive_image(target_day: date) -> None:
     """Keep an optional dated copy without affecting the current dashboard image."""
     if not ARCHIVE_IMAGES:
         return
-    archive_path = ROOT / "archive" / f"{target_day.year:04d}" / f"{target_day.month:02d}" / f"{target_day.isoformat()}.png"
+    archive_path = ARCHIVE_DIR / f"{target_day.year:04d}" / f"{target_day.month:02d}" / f"{target_day.isoformat()}.png"
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = archive_path.with_suffix(".tmp.png")
     shutil.copy2(IMAGE_PATH, temporary_path)
     os.replace(temporary_path, archive_path)
     size_mib = archive_path.stat().st_size / (1024 * 1024)
     log(f"Archived {target_day.isoformat()} image to {archive_path} ({size_mib:.2f} MiB)")
+    try:
+        write_archive_viewer()
+    except OSError as exc:
+        log(f"Archive viewer update failed: {exc}")
 
 
 def generate(target_day: date) -> None:
@@ -1277,6 +1400,10 @@ def daemon() -> int:
         last_attempt_at = 0.0
         startup_pending = True
         initial_status_logged = False
+        try:
+            write_archive_viewer()
+        except OSError as exc:
+            log(f"Archive viewer unavailable: {exc}")
         while not SHUTDOWN_EVENT.is_set():
             now = datetime.now(TIME_ZONE)
             today = now.date()
