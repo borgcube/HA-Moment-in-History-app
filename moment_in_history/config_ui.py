@@ -76,7 +76,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.25",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.26",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -1646,7 +1646,8 @@ def _page() -> str:
   testEmailForm.addEventListener('submit', sendTestEmail);
   document.getElementById('test-email-cancel').addEventListener('click', closeTestEmailDialog);
   document.getElementById('smtp-test-connection').addEventListener('click', testSmtpConnection);
-  ['primary-url-input', 'fallback-url-input', 'image-provider', 'openai-quality', 'openai-key',
+  ['primary-url-input', 'fallback-url-input', 'primary-model', 'fallback-model',
+    'image-provider', 'openai-quality', 'openai-key',
     'clear-openai-key', 'openai-model', 'image-model', 'image-backend-url',
     'image-backend-fallback-url', 'comfyui-model', 'schedule-time', 'email-enabled',
     'email-entity', 'email-camera-entity'].forEach(function (id) {

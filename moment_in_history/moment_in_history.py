@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.25"
+APP_VERSION = "1.9.26"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.25",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.26",
         },
     )
     try:
@@ -813,7 +813,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.25",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.26",
         },
         method="POST",
     )
@@ -985,7 +985,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.25",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.26",
         },
         method="POST",
     )
