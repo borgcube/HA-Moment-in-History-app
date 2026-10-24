@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.28 starting", report)
+            self.assertIn("Moment in history App 1.9.29 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -1213,7 +1213,7 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertIn('id="primary-url-input"', page)
             self.assertIn('id="fallback-url-input"', page)
             self.assertIn("'primary-model', 'fallback-model'", page)
-            self.assertIn('href="/local/moment-in-history/archive.html"', page)
+            self.assertIn('href="/local/moment-in-history/archive.html?v=2"', page)
             self.assertIn('id="image-provider"', page)
             self.assertIn('id="openai-key"', page)
             self.assertIn('id="schedule-time"', page)
