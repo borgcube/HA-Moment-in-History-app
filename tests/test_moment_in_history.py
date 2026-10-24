@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.24 starting", report)
+            self.assertIn("Moment in history App 1.9.25 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -1091,14 +1091,32 @@ class ModelSelectionTest(unittest.TestCase):
             ), patch.object(moment_in_history, "SUPERVISOR_TOKEN", "supervisor-token"), \
                     patch.object(moment_in_history, "WEB_SETTINGS_PATH", Path(directory) / "web-settings.json"), \
                     patch.object(moment_in_history, "urlopen", return_value=response) as urlopen_mock:
-                moment_in_history.save_model_options({"text_model": "new-model"})
+                moment_in_history.save_model_options(
+                    {
+                        "text_model": "new-model",
+                        "email_notify_entity": "notify.moment_in_history_kamau_borgcube_com",
+                    }
+                )
+
+            saved = json.loads(
+                (Path(directory) / "web-settings.json").read_text(encoding="utf-8")
+            )
 
         request = urlopen_mock.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(payload["options"]["text_model"], "new-model")
         self.assertEqual(payload["options"]["openai_api_key"], "secret-key")
         self.assertTrue(payload["options"]["other_option"])
+        self.assertEqual(
+            payload["options"]["email_notify_entity"],
+            "notify.moment_in_history_kamau_borgcube_com",
+        )
         self.assertEqual(request.get_header("Authorization"), "Bearer supervisor-token")
+        self.assertEqual(saved["text_model"], "new-model")
+        self.assertEqual(
+            saved["email_notify_entity"],
+            "notify.moment_in_history_kamau_borgcube_com",
+        )
 
     def test_ingress_ui_renders_and_saves_model_selection(self):
         saved: list[dict[str, str]] = []

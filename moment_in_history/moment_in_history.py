@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.24"
+APP_VERSION = "1.9.25"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.24",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.25",
         },
     )
     try:
@@ -813,7 +813,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.24",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.25",
         },
         method="POST",
     )
@@ -955,7 +955,7 @@ def send_test_email(notify_entities: list[str] | None = None) -> dict[str, str]:
 
 
 def save_model_options(changes: dict[str, str]) -> None:
-    """Persist Web UI selections through Supervisor and an App-owned backup."""
+    """Persist Web UI selections before asking Supervisor to restart the app."""
     if not SUPERVISOR_TOKEN:
         raise RuntimeError("SUPERVISOR_TOKEN is unavailable")
     options = dict(config_ui.DEFAULT_WEB_OPTIONS)
@@ -965,13 +965,27 @@ def save_model_options(changes: dict[str, str]) -> None:
     for field in config_ui.SELECTABLE_FIELDS:
         if field in changes:
             options[field] = changes[field]
+    persisted_options = {
+        field: options[field]
+        for field in config_ui.WEB_SETTINGS_FIELDS
+        if field in options
+    }
+    try:
+        WEB_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        WEB_SETTINGS_PATH.write_text(
+            json.dumps(persisted_options, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        PERSISTED_WEB_OPTIONS.update(persisted_options)
+    except OSError as exc:
+        raise RuntimeError(f"Web UI settings backup unavailable: {exc}") from exc
     request = Request(
         "http://supervisor/addons/self/options",
         data=json.dumps({"options": options}).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.24",
+            "User-Agent": "BORGcube-MomentInHistory/1.9.25",
         },
         method="POST",
     )
@@ -980,29 +994,6 @@ def save_model_options(changes: dict[str, str]) -> None:
             response.read()
     except HTTPError as exc:
         raise RuntimeError(f"Supervisor options update failed ({exc.code})") from exc
-    try:
-        WEB_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        WEB_SETTINGS_PATH.write_text(
-            json.dumps(
-                {
-                    field: options[field]
-                    for field in config_ui.WEB_SETTINGS_FIELDS
-                    if field in options
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        PERSISTED_WEB_OPTIONS.update(
-            {
-                field: options[field]
-                for field in config_ui.WEB_SETTINGS_FIELDS
-                if field in options
-            }
-        )
-    except OSError as exc:
-        print(f"Web UI settings backup unavailable: {exc}", file=sys.stderr, flush=True)
 
 
 def get_home_assistant_notify_entities() -> list[str]:
