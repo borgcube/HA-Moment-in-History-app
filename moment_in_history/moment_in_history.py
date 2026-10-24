@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.30"
+APP_VERSION = "1.9.31"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -74,7 +74,7 @@ def _load_supervisor_options() -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.30",
+            "User-Agent": "MomentInHistory/1.9.31",
         },
     )
     try:
@@ -161,15 +161,15 @@ LOG_PATH = ROOT / "generation.log"
 BRITANNICA_URL = "https://www.britannica.com/on-this-day"
 WIKIMEDIA_URL = "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/{month:02d}/{day:02d}"
 
-OLLAMA_BASE_URL = _setting("OLLAMA_BASE_URL", "primary_ollama_url", "http://ollama01.borgcube.com:11434")
-OLLAMA_FALLBACK_URL = _setting("OLLAMA_FALLBACK_URL", "fallback_ollama_url", "http://ollama02.borgcube.com:11434")
+OLLAMA_BASE_URL = _setting("OLLAMA_BASE_URL", "primary_ollama_url", "http://ollama-primary.example.local:11434")
+OLLAMA_FALLBACK_URL = _setting("OLLAMA_FALLBACK_URL", "fallback_ollama_url", "http://ollama-secondary.example.local:11434")
 TEXT_MODEL = _setting("MOMENT_TEXT_MODEL", "text_model", "qwen3.8:27b-mlx")
 FALLBACK_TEXT_MODEL = _setting("MOMENT_FALLBACK_TEXT_MODEL", "fallback_text_model", "gemma4:e4b")
 IMAGE_MODEL = _setting("MOMENT_IMAGE_MODEL", "image_model", "Tongyi-MAI/Z-Image-Turbo")
 COMFYUI_MODEL = _setting(
     "MOMENT_COMFYUI_MODEL", "comfyui_model", "sd_xl_turbo_1.0.safetensors"
 )
-IMAGE_BACKEND_URL = _setting("MOMENT_IMAGE_BACKEND_URL", "image_backend_url", "http://ollama02.borgcube.com:8188")
+IMAGE_BACKEND_URL = _setting("MOMENT_IMAGE_BACKEND_URL", "image_backend_url", "http://image-backend.example.local:8188")
 IMAGE_BACKEND_FALLBACK_URL = _setting("MOMENT_IMAGE_BACKEND_FALLBACK_URL", "image_backend_fallback_url", "").strip()
 IMAGE_PROVIDER = _setting("MOMENT_IMAGE_PROVIDER", "image_provider", "openai").strip().lower()
 OPENAI_API_KEY = _setting("OPENAI_API_KEY", "openai_api_key", "").strip()
@@ -304,7 +304,7 @@ def fetch_bytes(url: str, *, timeout: int = 30) -> bytes:
     request = Request(
         url,
         headers={
-            "User-Agent": "BORGcube-MomentInHistory/1.0 (+https://github.com/borgcube/HA-Moment-in-History-app)",
+            "User-Agent": "MomentInHistory/1.0",
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         },
     )
@@ -436,7 +436,7 @@ def post_json(url: str, payload: dict[str, Any], *, timeout: int = 900) -> str:
     request = Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "User-Agent": "BORGcube-MomentInHistory/1.0"},
+        headers={"Content-Type": "application/json", "User-Agent": "MomentInHistory/1.0"},
         method="POST",
     )
     with urlopen(request, timeout=timeout) as response:
@@ -476,7 +476,7 @@ def post_image(url: str, payload: dict[str, Any], *, timeout: int = 1800) -> byt
     request = Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "User-Agent": "BORGcube-MomentInHistory/1.0"},
+        headers={"Content-Type": "application/json", "User-Agent": "MomentInHistory/1.0"},
         method="POST",
     )
     with urlopen(request, timeout=timeout) as response:
@@ -493,7 +493,7 @@ def get_image(url: str, *, timeout: int = 1800) -> bytes:
         url,
         headers={
             "Accept": "image/png",
-            "User-Agent": "BORGcube-MomentInHistory/1.1",
+            "User-Agent": "MomentInHistory/1.1",
         },
         method="GET",
     )
@@ -621,7 +621,7 @@ def generate_openai_image(prompt: str) -> bytes:
         headers={
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.1",
+            "User-Agent": "MomentInHistory/1.1",
         },
         method="POST",
     )
@@ -1016,7 +1016,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.30",
+            "User-Agent": "MomentInHistory/1.9.31",
         },
         method="POST",
     )
@@ -1188,7 +1188,7 @@ def save_model_options(changes: dict[str, str]) -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.30",
+            "User-Agent": "MomentInHistory/1.9.31",
         },
         method="POST",
     )
@@ -1220,7 +1220,7 @@ def clear_regenerate_today_request() -> None:
         headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.30",
+            "User-Agent": "MomentInHistory/1.9.31",
         },
         method="POST",
     )

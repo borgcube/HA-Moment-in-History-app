@@ -39,11 +39,11 @@ WEB_SETTINGS_FIELDS = (
 )
 SELECTABLE_FIELDS = WEB_SETTINGS_FIELDS
 DEFAULT_WEB_OPTIONS = {
-    "primary_ollama_url": "http://ollama01.borgcube.com:11434",
-    "fallback_ollama_url": "http://ollama02.borgcube.com:11434",
+    "primary_ollama_url": "http://ollama-primary.example.local:11434",
+    "fallback_ollama_url": "http://ollama-secondary.example.local:11434",
     "text_model": "qwen3.8:27b-mlx",
     "fallback_text_model": "gemma4:e4b",
-    "image_backend_url": "https://openclaw.borgcube.com/comfyui",
+    "image_backend_url": "https://comfyui.example.com/comfyui",
     "image_backend_fallback_url": "",
     "image_provider": "openai",
     "openai_api_key": "",
@@ -76,7 +76,7 @@ def _request_json(
         data=data,
         headers={
             "Accept": "application/json",
-            "User-Agent": "BORGcube-MomentInHistory/1.9.30",
+            "User-Agent": "MomentInHistory/1.9.31",
             **({"Content-Type": "application/json"} if data is not None else {}),
             **(headers or {}),
         },
@@ -1061,11 +1061,11 @@ def _page() -> str:
     <div class="grid">
       <div>
         <label for="primary-url-input">Primary Ollama API URL</label>
-        <input id="primary-url-input" type="url" inputmode="url" placeholder="http://ollama01.example.local:11434">
+        <input id="primary-url-input" type="url" inputmode="url" placeholder="http://ollama-primary.example.local:11434">
       </div>
       <div>
         <label for="fallback-url-input">Fallback Ollama API URL</label>
-        <input id="fallback-url-input" type="url" inputmode="url" placeholder="http://ollama02.example.local:11434">
+        <input id="fallback-url-input" type="url" inputmode="url" placeholder="http://ollama-secondary.example.local:11434">
       </div>
       <div>
         <label for="primary-model">Primary text model</label>
@@ -1113,7 +1113,7 @@ def _page() -> str:
       </div>
       <div>
         <label for="image-backend-url">Local image API / ComfyUI URL</label>
-        <input id="image-backend-url" type="url" inputmode="url" placeholder="https://openclaw.borgcube.com/comfyui">
+        <input id="image-backend-url" type="url" inputmode="url" placeholder="https://comfyui.example.com/comfyui">
       </div>
       <div>
         <label for="image-backend-fallback-url">Fallback local image API / ComfyUI URL</label>

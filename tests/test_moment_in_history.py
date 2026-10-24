@@ -46,7 +46,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.30 starting", report)
+            self.assertIn("Moment in history App 1.9.31 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -67,7 +67,7 @@ class EventPageRefreshTest(unittest.TestCase):
                         moment_in_history,
                         "SUPERVISOR_OPTIONS",
                         {
-                            "primary_ollama_url": "http://ollama01.example:11434",
+                            "primary_ollama_url": "http://ollama-primary.example:11434",
                             "openai_api_key": "secret-key",
                             "openai_image_model": "gpt-image-2",
                         },
@@ -76,7 +76,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.migrate_web_options()
                 saved = json.loads(settings_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(saved["primary_ollama_url"], "http://ollama01.example:11434")
+            self.assertEqual(saved["primary_ollama_url"], "http://ollama-primary.example:11434")
             self.assertEqual(saved["openai_api_key"], "secret-key")
             self.assertEqual(saved["openai_image_model"], "gpt-image-2")
 
@@ -574,7 +574,7 @@ class ModelSelectionTest(unittest.TestCase):
             },
         ):
             self.assertEqual(
-                config_ui.ollama_models("http://ollama01.example:11434"),
+                config_ui.ollama_models("http://ollama-primary.example:11434"),
                 ["gemma4:e4b", "qwen3.8:27b-mlx"],
             )
 
@@ -584,7 +584,7 @@ class ModelSelectionTest(unittest.TestCase):
             "_request_json",
             return_value={"models": [{"name": "qwen3.8:27b-mlx", "details": {"families": None}}]},
         ):
-            self.assertEqual(config_ui.ollama_models("http://ollama01.example:11434"), ["qwen3.8:27b-mlx"])
+            self.assertEqual(config_ui.ollama_models("http://ollama-primary.example:11434"), ["qwen3.8:27b-mlx"])
 
     def test_openai_image_models_are_filtered(self):
         with patch.object(
@@ -602,7 +602,7 @@ class ModelSelectionTest(unittest.TestCase):
             return_value=["sd_xl_turbo_1.0.safetensors", "custom.safetensors"],
         ):
             self.assertEqual(
-                config_ui.image_backend_models("https://openclaw.example/comfyui"),
+                config_ui.image_backend_models("https://comfyui.example.com/comfyui"),
                 ["custom.safetensors", "sd_xl_turbo_1.0.safetensors"],
             )
 
@@ -613,10 +613,10 @@ class ModelSelectionTest(unittest.TestCase):
             return_value={"ok": True, "model": "Tongyi-MAI/Z-Image-Turbo"},
         ) as request_json:
             self.assertEqual(
-                config_ui.image_backend_models("http://storage01.example:8188"),
+                config_ui.image_backend_models("http://image-backend.example.com:8188"),
                 ["Tongyi-MAI/Z-Image-Turbo"],
             )
-        request_json.assert_called_once_with("http://storage01.example:8188/health")
+            request_json.assert_called_once_with("http://image-backend.example.com:8188/health")
 
     def test_model_discovery_includes_detected_image_checkpoints(self):
         with patch.object(config_ui, "ollama_models", return_value=[]), \
@@ -625,7 +625,7 @@ class ModelSelectionTest(unittest.TestCase):
                 {
                     "primary_ollama_url": "",
                     "fallback_ollama_url": "",
-                    "image_backend_url": "https://openclaw.example/comfyui",
+                    "image_backend_url": "https://comfyui.example.com/comfyui",
                 }
             )
         self.assertEqual(result["models"]["image_backend"], ["detected.safetensors"])
@@ -635,8 +635,8 @@ class ModelSelectionTest(unittest.TestCase):
                 patch.object(config_ui, "openai_image_models", return_value=["gpt-image-2"]):
             result = config_ui.discover_models(
                 {
-                    "primary_ollama_url": "http://ollama01.example:11434",
-                    "fallback_ollama_url": "http://ollama02.example:11434",
+                    "primary_ollama_url": "http://ollama-primary.example:11434",
+                    "fallback_ollama_url": "http://ollama-secondary.example:11434",
                     "text_model": "primary-model",
                     "fallback_text_model": "fallback-model",
                     "openai_image_model": "gpt-image-2",
@@ -683,7 +683,7 @@ class ModelSelectionTest(unittest.TestCase):
             log=lambda message: None,
         )
         port = server.server_address[1]
-        image_backend = "https://openclaw.example/comfyui"
+        image_backend = "https://comfyui.example.com/comfyui"
         try:
             with patch.object(config_ui, "image_backend_models", return_value=["detected.safetensors"]) as discover:
                 with urlopen(
@@ -1166,7 +1166,7 @@ class ModelSelectionTest(unittest.TestCase):
                 moment_in_history.save_model_options(
                     {
                         "text_model": "new-model",
-                        "email_notify_entity": "notify.moment_in_history_kamau_borgcube_com",
+                        "email_notify_entity": "notify.moment_in_history_recipient",
                     }
                 )
 
@@ -1181,13 +1181,13 @@ class ModelSelectionTest(unittest.TestCase):
         self.assertTrue(payload["options"]["other_option"])
         self.assertEqual(
             payload["options"]["email_notify_entity"],
-            "notify.moment_in_history_kamau_borgcube_com",
+            "notify.moment_in_history_recipient",
         )
         self.assertEqual(request.get_header("Authorization"), "Bearer supervisor-token")
         self.assertEqual(saved["text_model"], "new-model")
         self.assertEqual(
             saved["email_notify_entity"],
-            "notify.moment_in_history_kamau_borgcube_com",
+            "notify.moment_in_history_recipient",
         )
 
     def test_ingress_ui_renders_and_saves_model_selection(self):
@@ -1256,8 +1256,8 @@ class ModelSelectionTest(unittest.TestCase):
                         "fallback_text_model": "new-fallback",
                         "openai_image_model": "gpt-image-2",
                         "email_notify_entity": "notify.email_recipient",
-                        "primary_ollama_url": "http://ollama01.example:11434",
-                        "fallback_ollama_url": "http://ollama02.example:11434",
+                        "primary_ollama_url": "http://ollama-primary.example:11434",
+                        "fallback_ollama_url": "http://ollama-secondary.example:11434",
                     }
                 ).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
@@ -1269,8 +1269,8 @@ class ModelSelectionTest(unittest.TestCase):
             self.assertEqual(
                 saved,
                 [{
-                    "primary_ollama_url": "http://ollama01.example:11434",
-                    "fallback_ollama_url": "http://ollama02.example:11434",
+                    "primary_ollama_url": "http://ollama-primary.example:11434",
+                    "fallback_ollama_url": "http://ollama-secondary.example:11434",
                     "text_model": "new-primary",
                     "fallback_text_model": "new-fallback",
                     "openai_image_model": "gpt-image-2",
