@@ -31,6 +31,34 @@ class AppMetadataTest(unittest.TestCase):
 
 
 class EventPageRefreshTest(unittest.TestCase):
+    def test_fetch_wikipedia_events_uses_the_direct_english_rest_feed(self):
+        payload = {
+            "events": [
+                {
+                    "year": 1977,
+                    "text": "Ali Maow Maalin develops a rash in Somalia.",
+                    "pages": [
+                        {
+                            "titles": {"normalized": "Ali Maow Maalin"},
+                            "content_urls": {
+                                "desktop": {"page": "https://en.wikipedia.org/wiki/Ali_Maow_Maalin"}
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        with patch.object(moment_in_history, "fetch_json", return_value=payload) as fetch_json:
+            events = moment_in_history.fetch_wikipedia_events(date(2026, 10, 26))
+
+        fetch_json.assert_called_once_with(
+            "https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/10/26"
+        )
+        self.assertEqual(events[0].year, 1977)
+        self.assertEqual(events[0].title, "Ali Maow Maalin")
+        self.assertEqual(events[0].source, "English Wikipedia On This Day")
+        self.assertEqual(events[0].source_url, "https://en.wikipedia.org/wiki/Ali_Maow_Maalin")
+
     def test_log_writes_file_and_supervisor_stdout(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -58,7 +86,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.36 starting", report)
+            self.assertIn("Moment in history App 1.9.37 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -335,7 +363,7 @@ class EventPageRefreshTest(unittest.TestCase):
                     patch.object(moment_in_history, "EVENT_JSON_PATH", root / "event.json"), \
                     patch.object(moment_in_history, "EVENT_HTML_PATH", root / "event.html"), \
                     patch.object(moment_in_history, "LOG_PATH", root / "generation.log"), \
-                    patch.object(moment_in_history, "fetch_britannica_events", return_value=[event]), \
+                    patch.object(moment_in_history, "fetch_wikipedia_events", return_value=[event]), \
                     patch.object(moment_in_history, "choose_event", return_value=(event, "test")), \
                     patch.object(moment_in_history, "post_json_with_fallback", return_value=json.dumps({"message": {"content": "The room holds its breath."}})), \
                     patch.object(moment_in_history, "run_image_model", side_effect=RuntimeError("image backend failed")), \
@@ -365,7 +393,7 @@ class EventPageRefreshTest(unittest.TestCase):
                     patch.object(moment_in_history, "EVENT_JSON_PATH", root / "event.json"), \
                     patch.object(moment_in_history, "EVENT_HTML_PATH", root / "event.html"), \
                     patch.object(moment_in_history, "LOG_PATH", root / "generation.log"), \
-                    patch.object(moment_in_history, "fetch_britannica_events", return_value=[event]), \
+                    patch.object(moment_in_history, "fetch_wikipedia_events", return_value=[event]), \
                     patch.object(moment_in_history, "choose_event", return_value=(event, "test")), \
                     patch.object(
                         moment_in_history,

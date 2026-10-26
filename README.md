@@ -10,7 +10,7 @@ See the [changelog](moment_in_history/CHANGELOG.md) for release benefits, behavi
 
 ## Features
 
-- Britannica is attempted first for the daily event list, with Wikimedia's machine-readable On This Day feed as a fallback when Britannica is unavailable.
+- English Wikipedia's machine-readable On This Day REST feed provides the daily event list directly.
 - Ollama ranks the complete event list and writes the one-sentence “ten seconds before” scene direction.
 - OpenAI `gpt-image-2` is the default image backend, with optional LAN and ComfyUI backends.
 - Two Ollama endpoints can be configured for text-generation failover.
@@ -219,9 +219,9 @@ The app writes these files under `/config/www/moment-in-history/`:
 | `archive/YYYY/MM/YYYY-MM-DD.png` | Optional dated image archive |
 | `archive/YYYY/MM/YYYY-MM-DD.json` | Optional archived event text and source metadata |
 
-## Schedule and source fallback
+## Schedule and event source
 
-The app checks every 30 seconds and generates after `schedule_time` if today's generation has not completed. A restart after the scheduled time automatically catches up when today's image is missing. **Regenerate on startup** overrides the normal daily guard and creates a fresh image even when today's image is already present. Britannica is attempted first. If it returns an anti-bot page, an HTTP error, or no parseable event list, the Wikimedia On This Day feed is used.
+The app checks every 30 seconds and generates after `schedule_time` if today's generation has not completed. A restart after the scheduled time automatically catches up when today's image is missing. **Regenerate on startup** overrides the normal daily guard and creates a fresh image even when today's image is already present. Event discovery uses the English Wikipedia REST feed at `https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/MM/DD`; the response contains the event text, historical year, and linked Wikipedia pages used by the app.
 
 ## Troubleshooting
 

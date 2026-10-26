@@ -6,6 +6,18 @@ Release notes focus on why an existing user should upgrade and call out any acti
 
 Add user-visible changes here during development, then move them into a versioned section when `moment_in_history/config.yaml` is bumped.
 
+## 1.9.37 — 2026-10-26
+
+### Why upgrade
+
+Event discovery no longer depends on the Britannica webpage, which has been returning access-denied responses to the app.
+
+### Changed
+
+- Use the direct English Wikipedia REST On This Day feed as the app's event source.
+- Remove the Britannica HTML scraper and its misleading fallback log path.
+- Record the source as **English Wikipedia On This Day** and keep each event's linked Wikipedia article as its source URL.
+
 ## 1.9.36 — 2026-10-26
 
 ### Why upgrade

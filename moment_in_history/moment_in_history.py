@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Generate the daily "Moment in history" image and publish its metadata.
 
-The script deliberately tries Britannica first.  Some network paths receive a
-Cloudflare challenge instead of the page, so a public, machine-readable
-Wikimedia On This Day feed is used as a documented fallback.  Event selection
-and the image prompt are kept separate so the generated image is always the
-moment immediately before the selected event, rather than the event itself.
+The app uses the public, machine-readable English Wikipedia On This Day REST
+feed for event discovery. Event selection and the image prompt are kept
+separate so the generated image is always the moment immediately before the
+selected event, rather than the event itself.
 """
 
 from __future__ import annotations
@@ -26,7 +25,6 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -38,7 +36,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.36"
+APP_VERSION = "1.9.37"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -158,8 +156,7 @@ ARCHIVE_HTML_PATH = ROOT / "archive.html"
 LOCK_PATH = ROOT / ".generation.lock"
 LOG_PATH = ROOT / "generation.log"
 
-BRITANNICA_URL = "https://www.britannica.com/on-this-day"
-WIKIMEDIA_URL = "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/{month:02d}/{day:02d}"
+WIKIPEDIA_ON_THIS_DAY_URL = "https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/{month:02d}/{day:02d}"
 
 OLLAMA_BASE_URL = _setting("OLLAMA_BASE_URL", "primary_ollama_url", "http://ollama-primary.example.local:11434")
 OLLAMA_FALLBACK_URL = _setting("OLLAMA_FALLBACK_URL", "fallback_ollama_url", "http://ollama-secondary.example.local:11434")
@@ -258,44 +255,6 @@ class Event:
         }
 
 
-class VisibleTextParser(HTMLParser):
-    """Collect readable blocks without depending on third-party packages."""
-
-    BLOCK_TAGS = {"p", "li", "h1", "h2", "h3", "h4", "article"}
-    SKIP_TAGS = {"script", "style", "noscript", "svg", "nav", "header", "footer"}
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self._skip_depth = 0
-        self._block_depth = 0
-        self._buffer: list[str] = []
-        self.blocks: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        tag = tag.lower()
-        if tag in self.SKIP_TAGS:
-            self._skip_depth += 1
-        if tag in self.BLOCK_TAGS and not self._skip_depth:
-            self._block_depth += 1
-            if self._block_depth == 1:
-                self._buffer = []
-
-    def handle_endtag(self, tag: str) -> None:
-        tag = tag.lower()
-        if tag in self.BLOCK_TAGS and self._block_depth and not self._skip_depth:
-            self._block_depth -= 1
-            if self._block_depth == 0:
-                value = clean_text(" ".join(self._buffer))
-                if value:
-                    self.blocks.append(value)
-        if tag in self.SKIP_TAGS and self._skip_depth:
-            self._skip_depth -= 1
-
-    def handle_data(self, data: str) -> None:
-        if not self._skip_depth and self._block_depth:
-            self._buffer.append(data)
-
-
 def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(value)).strip()
 
@@ -304,7 +263,7 @@ def fetch_bytes(url: str, *, timeout: int = 30) -> bytes:
     request = Request(
         url,
         headers={
-            "User-Agent": "MomentInHistory/1.0",
+            "User-Agent": "MomentInHistory/1.9.37 (+https://github.com/borgcube/HA-Moment-in-History-app)",
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         },
     )
@@ -316,11 +275,6 @@ def fetch_json(url: str) -> dict[str, Any]:
     return json.loads(fetch_bytes(url).decode("utf-8"))
 
 
-def parse_year(text: str) -> int | None:
-    match = re.search(r"(?<!\d)(\d{1,4})(?:\s*(?:BCE|BC|CE|AD))?(?!\d)", text, re.I)
-    return int(match.group(1)) if match else None
-
-
 def format_event_year(year: int | None) -> str:
     """Return the historical year used as the image's only text label."""
     if year is None:
@@ -330,43 +284,10 @@ def format_event_year(year: int | None) -> str:
     return str(year)
 
 
-def fetch_britannica_events(day: date) -> list[Event]:
-    """Best-effort extraction from Britannica's current On This Day page."""
-    raw = fetch_bytes(BRITANNICA_URL).decode("utf-8", "replace")
-    lowered = raw.lower()
-    if "just a moment" in lowered or "cf_chl_opt" in lowered or len(raw) < 20_000:
-        raise RuntimeError("Britannica returned a bot-challenge page")
-
-    parser = VisibleTextParser()
-    parser.feed(raw)
-    blocks = parser.blocks
-    events: list[Event] = []
-    seen: set[str] = set()
-    event_section = False
-    for block in blocks:
-        marker = block.lower()
-        if marker in {"events", "historical events", "on this day"}:
-            event_section = True
-            continue
-        if marker in {"births", "deaths", "holidays", "related"}:
-            event_section = False
-        if not event_section or len(block) < 35:
-            continue
-        if not re.search(r"\b\d{2,4}\b", block):
-            continue
-        normalized = block[:700]
-        key = normalized.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        events.append(Event(parse_year(normalized), normalized, normalized, "Britannica", BRITANNICA_URL))
-    if not events:
-        raise RuntimeError("Britannica page contained no parseable event blocks")
-    return events
-
-
-def fetch_wikimedia_events(day: date) -> list[Event]:
-    payload = fetch_json(WIKIMEDIA_URL.format(month=day.month, day=day.day))
+def fetch_wikipedia_events(day: date) -> list[Event]:
+    """Fetch significant events from English Wikipedia's On This Day feed."""
+    feed_url = WIKIPEDIA_ON_THIS_DAY_URL.format(month=day.month, day=day.day)
+    payload = fetch_json(feed_url)
     events: list[Event] = []
     for item in payload.get("events", []):
         text = clean_text(str(item.get("text", "")))
@@ -383,12 +304,12 @@ def fetch_wikimedia_events(day: date) -> list[Event]:
                 year=item.get("year"),
                 title=title,
                 text=text,
-                source="Wikimedia On This Day (fallback)",
-                source_url=desktop.get("page") or WIKIMEDIA_URL.format(month=day.month, day=day.day),
+                source="English Wikipedia On This Day",
+                source_url=desktop.get("page") or feed_url,
             )
         )
     if not events:
-        raise RuntimeError("Wikimedia returned no events")
+        raise RuntimeError("English Wikipedia On This Day returned no events")
     return events
 
 
@@ -1416,12 +1337,11 @@ def archive_image(target_day: date) -> None:
 def generate(target_day: date) -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     try:
-        events = fetch_britannica_events(target_day)
-        source_status = "Britannica"
+        events = fetch_wikipedia_events(target_day)
+        source_status = "English Wikipedia On This Day"
     except (HTTPError, URLError, RuntimeError, TimeoutError) as exc:
-        log(f"Britannica unavailable ({exc}); using Wikimedia fallback")
-        events = fetch_wikimedia_events(target_day)
-        source_status = "Wikimedia fallback after Britannica attempt"
+        log(f"English Wikipedia On This Day unavailable ({exc})")
+        raise
 
     selected, selection_reason = choose_event(events)
     pre_moment_prompt = f"Write a vivid, filmable visual brief of 60 to 90 words in 2 or 3 sentences for the exact ten seconds before this event. Treat the supplied event as authoritative context, but do not describe the event happening or its aftermath. Specify the historically appropriate location, period, lighting or weather, focal subject, up to five people's distinct posture/gaze/gesture, meaningful physical objects, and one immediate physical cue that proves the action is about to begin. Make the scene event-specific and causal, never a generic crowd or posed gathering. Mention only visible people, setting, light, atmosphere, and non-text-bearing physical objects. Do not mention paper, pages, scripts, screens, signs, labels, logos, or writing. Event: {selected.text}"
@@ -1458,7 +1378,6 @@ def generate(target_day: date) -> None:
         "selection_reason": selection_reason,
         "source": source_status,
         "source_url": selected.source_url,
-        "britannica_url": BRITANNICA_URL,
         "image_url": IMAGE_URL,
         "generated_at": datetime.now(TIME_ZONE).isoformat(),
         "image_model": IMAGE_MODEL,
