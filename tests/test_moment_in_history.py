@@ -58,7 +58,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.35 starting", report)
+            self.assertIn("Moment in history App 1.9.36 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -344,6 +344,44 @@ class EventPageRefreshTest(unittest.TestCase):
                     moment_in_history.generate(date(2026, 10, 23))
 
             send_email.assert_not_called()
+
+    def test_generate_stamps_the_selected_event_year_not_the_generation_date(self):
+        event = moment_in_history.Event(
+            year=1966,
+            title="A historical event",
+            text="A historical event happens.",
+            source="Test source",
+            source_url="https://example.invalid/event",
+        )
+
+        def write_fake_image(_prompt, destination):
+            destination.write_bytes(b"fake png")
+            return "Test image provider"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(moment_in_history, "ROOT", root), \
+                    patch.object(moment_in_history, "IMAGE_PATH", root / "moment-in-history.png"), \
+                    patch.object(moment_in_history, "EVENT_JSON_PATH", root / "event.json"), \
+                    patch.object(moment_in_history, "EVENT_HTML_PATH", root / "event.html"), \
+                    patch.object(moment_in_history, "LOG_PATH", root / "generation.log"), \
+                    patch.object(moment_in_history, "fetch_britannica_events", return_value=[event]), \
+                    patch.object(moment_in_history, "choose_event", return_value=(event, "test")), \
+                    patch.object(
+                        moment_in_history,
+                        "post_json_with_fallback",
+                        return_value=json.dumps({"message": {"content": "The room holds its breath."}}),
+                    ), \
+                    patch.object(moment_in_history, "run_image_model", side_effect=write_fake_image), \
+                    patch.object(moment_in_history, "overlay_date") as overlay, \
+                    patch.object(moment_in_history, "archive_image"), \
+                    patch.object(moment_in_history, "send_event_email"):
+                moment_in_history.generate(date(2026, 10, 26))
+
+            self.assertEqual(overlay.call_args.args[1], "1966")
+            metadata = json.loads((root / "event.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["date_label"], "26 October 2026")
+            self.assertEqual(metadata["event_year_label"], "1966")
 
 
 class ComfyUIImageProviderTest(unittest.TestCase):

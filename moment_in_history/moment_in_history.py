@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.35"
+APP_VERSION = "1.9.36"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -319,6 +319,15 @@ def fetch_json(url: str) -> dict[str, Any]:
 def parse_year(text: str) -> int | None:
     match = re.search(r"(?<!\d)(\d{1,4})(?:\s*(?:BCE|BC|CE|AD))?(?!\d)", text, re.I)
     return int(match.group(1)) if match else None
+
+
+def format_event_year(year: int | None) -> str:
+    """Return the historical year used as the image's only text label."""
+    if year is None:
+        return "Unknown year"
+    if year < 0:
+        return f"{abs(year)} BCE"
+    return str(year)
 
 
 def fetch_britannica_events(day: date) -> list[Event]:
@@ -697,7 +706,7 @@ def run_image_model(prompt: str, destination: Path) -> str:
 
 
 def overlay_date(path: Path, label: str) -> None:
-    """Guarantee that the only intentional text is the exact date."""
+    """Guarantee that the only intentional text is the supplied event-year label."""
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
@@ -1430,10 +1439,11 @@ def generate(target_day: date) -> None:
         pre_moment = "The setting holds in tense anticipation, with every detail poised for what is about to happen."
 
     date_label = f"{target_day.day} {target_day.strftime('%B %Y')}"
+    event_year_label = format_event_year(selected.year)
     prompt = build_image_prompt(pre_moment, target_day, selected.text)
     temp_image = ROOT / f"moment-in-history-{int(time.time())}.png"
     image_backend_used = run_image_model(prompt, temp_image)
-    overlay_date(temp_image, date_label)
+    overlay_date(temp_image, event_year_label)
     os.replace(temp_image, IMAGE_PATH)
 
     metadata = {
@@ -1442,6 +1452,7 @@ def generate(target_day: date) -> None:
         "event": selected.text,
         "title": selected.title,
         "year": selected.year,
+        "event_year_label": event_year_label,
         "description": selected.text,
         "pre_moment": pre_moment,
         "selection_reason": selection_reason,

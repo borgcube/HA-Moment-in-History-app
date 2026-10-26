@@ -6,6 +6,17 @@ Release notes focus on why an existing user should upgrade and call out any acti
 
 Add user-visible changes here during development, then move them into a versioned section when `moment_in_history/config.yaml` is bumped.
 
+## 1.9.36 — 2026-10-26
+
+### Why upgrade
+
+The artwork now carries the year of the historical event it depicts instead of the current calendar date.
+
+### Changed
+
+- The composited image label uses the selected event year, including a BCE label when the source provides a negative year.
+- The daily generation date remains available in the event details and email metadata.
+
 ## 1.9.35 — 2026-10-24
 
 ### Why upgrade

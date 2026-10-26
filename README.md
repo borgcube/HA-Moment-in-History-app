@@ -1,6 +1,6 @@
 # Moment in History for Home Assistant
 
-Moment in History generates one historical scene every day for a Home Assistant dashboard. It selects the most consequential event from the day's **On This Day** events, describes the instant exactly ten seconds before it, and generates a dramatic high-contrast cartoon illustration. The image contains only the date; the event details are disclosed as readable plain text.
+Moment in History generates one historical scene every day for a Home Assistant dashboard. It selects the most consequential event from the day's **On This Day** events, describes the instant exactly ten seconds before it, and generates a dramatic high-contrast cartoon illustration. The image contains only the selected event year; the event details are disclosed as readable plain text.
 
 This repository is a Home Assistant App repository. The root `repository.yaml` is required by Supervisor; add the repository URL itself to **Settings → Apps → Install app → ⋮ → Repositories**.
 
@@ -14,7 +14,7 @@ See the [changelog](moment_in_history/CHANGELOG.md) for release benefits, behavi
 - Ollama ranks the complete event list and writes the one-sentence “ten seconds before” scene direction.
 - OpenAI `gpt-image-2` is the default image backend, with optional LAN and ComfyUI backends.
 - Two Ollama endpoints can be configured for text-generation failover.
-- The date is composited after generation, so it is the only intentional text on the image.
+- The selected event year is composited after generation, so it is the only intentional text on the image.
 - The disclosure card reads the current event metadata as plain text and avoids stale browser-cached details.
 
 ## Installation
