@@ -217,7 +217,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.39 starting", report)
+            self.assertIn("Moment in history App 1.9.40 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -346,10 +346,9 @@ class EventPageRefreshTest(unittest.TestCase):
             self.assertIn("The room holds its breath.", page)
             self.assertNotIn('id="description"', page)
             self.assertNotIn("Current event description", page)
-            self.assertEqual(
-                json.loads((root / "event.json").read_text(encoding="utf-8"))["event"],
-                "Current event",
-            )
+            persisted = json.loads((root / "event.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["event"], "Current event")
+            self.assertNotIn("description", persisted)
 
     def test_refresh_event_page_removes_legacy_duplicate_without_generating(self):
         metadata = {
@@ -377,6 +376,7 @@ class EventPageRefreshTest(unittest.TestCase):
             self.assertNotIn('id="description"', page)
             self.assertIn("Current event", page)
             self.assertIn("The room holds its breath.", page)
+            self.assertNotIn("description", json.loads(event_path.read_text(encoding="utf-8")))
 
     def test_event_email_calls_home_assistant_smtp_with_current_camera(self):
         metadata = {

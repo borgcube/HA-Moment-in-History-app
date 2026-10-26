@@ -6,6 +6,17 @@ Release notes focus on why an existing user should upgrade and call out any acti
 
 Add user-visible changes here during development, then move them into a versioned section when `moment_in_history/config.yaml` is bumped.
 
+## 1.9.40 — 2026-10-26
+
+### Why upgrade
+
+Legacy event metadata can no longer make older consumers display the event summary twice.
+
+### Changed
+
+- Remove the obsolete duplicate `description` field whenever current event metadata is written.
+- Clean up existing `event.json` during App startup without generating a new image or sending a new email.
+
 ## 1.9.39 — 2026-10-26
 
 ### Why upgrade

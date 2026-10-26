@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.39"
+APP_VERSION = "1.9.40"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -270,7 +270,7 @@ def fetch_bytes(url: str, *, timeout: int = 30) -> bytes:
     request = Request(
         url,
         headers={
-            "User-Agent": "MomentInHistory/1.9.39 (+https://github.com/borgcube/HA-Moment-in-History-app)",
+            "User-Agent": "MomentInHistory/1.9.40 (+https://github.com/borgcube/HA-Moment-in-History-app)",
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         },
     )
@@ -881,7 +881,16 @@ def overlay_date(path: Path, label: str) -> None:
 
 
 def write_event_pages(metadata: dict[str, Any]) -> None:
-    EVENT_JSON_PATH.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    persisted_metadata = dict(metadata)
+    # ``description`` was the old name for the event summary.  Persisting it
+    # alongside ``event`` lets older consumers render the same sentence twice,
+    # so drop it when rewriting current metadata, including legacy data during
+    # startup refresh.
+    persisted_metadata.pop("description", None)
+    EVENT_JSON_PATH.write_text(
+        json.dumps(persisted_metadata, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     source_link = html.escape(metadata["source_url"], quote=True)
     title = html.escape(metadata["event"])
     pre_moment = html.escape(metadata["pre_moment"])
