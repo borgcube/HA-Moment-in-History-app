@@ -127,7 +127,7 @@ homeassistant:
 
 ### Optional image archive
 
-Set **Archive images** to true in App Configuration to keep dated copies under `/config/www/moment-in-history/archive/YYYY/MM/`. Open **Info → Open Web UI → Browse archived images** to view the dated thumbnail gallery; each thumbnail opens the full PNG and, when metadata is available, expands to show the event, the ten-seconds-before description, context, and source. Archiving is disabled by default so updates do not consume extra storage unexpectedly. A generated PNG is typically about **2 MB**, so archiving costs approximately 2 MB per day, or about 60 MB per 30-day month. The App logs the actual size of every archived image.
+Set **Archive images** to true in App Configuration to keep dated copies under `/config/www/moment-in-history/archive/YYYY/MM/`. Open **Info → Open Web UI → Browse archived images** to view the dated thumbnail gallery; each thumbnail opens the full PNG and, when metadata is available, expands to show the event, the ten-seconds-before description, and source. Archiving is disabled by default so updates do not consume extra storage unexpectedly. A generated PNG is typically about **2 MB**, so archiving costs approximately 2 MB per day, or about 60 MB per 30-day month. The App logs the actual size of every archived image.
 
 ### Restart and update behavior
 

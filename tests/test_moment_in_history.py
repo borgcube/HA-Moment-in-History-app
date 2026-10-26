@@ -217,7 +217,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.38 starting", report)
+            self.assertIn("Moment in history App 1.9.39 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -344,10 +344,39 @@ class EventPageRefreshTest(unittest.TestCase):
             self.assertIn("cache: 'no-store'", page)
             self.assertIn("Current event", page)
             self.assertIn("The room holds its breath.", page)
+            self.assertNotIn('id="description"', page)
+            self.assertNotIn("Current event description", page)
             self.assertEqual(
                 json.loads((root / "event.json").read_text(encoding="utf-8"))["event"],
                 "Current event",
             )
+
+    def test_refresh_event_page_removes_legacy_duplicate_without_generating(self):
+        metadata = {
+            "date": "2026-10-23",
+            "date_label": "23 October 2026",
+            "event": "Current event",
+            "title": "Current event",
+            "year": 1868,
+            "description": "Current event",
+            "pre_moment": "The room holds its breath.",
+            "source": "Test source",
+            "source_url": "https://example.invalid/event",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event_path = root / "event.json"
+            html_path = root / "event.html"
+            event_path.write_text(json.dumps(metadata), encoding="utf-8")
+            html_path.write_text('<p id="description">Current event</p>', encoding="utf-8")
+            with patch.object(moment_in_history, "EVENT_JSON_PATH", event_path), \
+                    patch.object(moment_in_history, "EVENT_HTML_PATH", html_path):
+                moment_in_history.refresh_event_page()
+
+            page = html_path.read_text(encoding="utf-8")
+            self.assertNotIn('id="description"', page)
+            self.assertIn("Current event", page)
+            self.assertIn("The room holds its breath.", page)
 
     def test_event_email_calls_home_assistant_smtp_with_current_camera(self):
         metadata = {
@@ -378,6 +407,7 @@ class EventPageRefreshTest(unittest.TestCase):
             self.assertEqual(payload["entity_id"], "notify.moment_in_history")
             self.assertIn("The room holds its breath.", payload["message"])
             self.assertIn("Show event details", payload["html"])
+            self.assertNotIn("Context", payload["html"])
             self.assertIn("cid:moment_in_history_image", payload["html"])
             self.assertEqual(
                 payload["attachments"][0]["media_source"]["media_content_id"],
@@ -728,8 +758,10 @@ class ComfyUIImageProviderTest(unittest.TestCase):
                 payload["entries"][0]["metadata_path"],
                 "archive/2026/10/2026-10-23.json",
             )
-            self.assertIn("Show event details", html_path.read_text(encoding="utf-8"))
-            self.assertIn("archive/index.json", html_path.read_text(encoding="utf-8"))
+            html = html_path.read_text(encoding="utf-8")
+            self.assertIn("Show event details", html)
+            self.assertNotIn("metadata.description", html)
+            self.assertIn("archive/index.json", html)
 
     def test_managed_email_mapping_removes_only_the_selected_smtp_subentry(self):
         with tempfile.TemporaryDirectory() as directory:

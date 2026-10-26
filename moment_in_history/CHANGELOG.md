@@ -6,6 +6,17 @@ Release notes focus on why an existing user should upgrade and call out any acti
 
 Add user-visible changes here during development, then move them into a versioned section when `moment_in_history/config.yaml` is bumped.
 
+## 1.9.39 — 2026-10-26
+
+### Why upgrade
+
+Event details no longer repeat the event summary as a redundant final paragraph.
+
+### Changed
+
+- Removed the duplicate event text from the current disclosure page, archived-image details, and email HTML.
+- Refresh the existing disclosure page on App startup so the cleanup takes effect without generating a new image.
+
 ## 1.9.38 — 2026-10-26
 
 ### Why upgrade

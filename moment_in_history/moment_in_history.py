@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.38"
+APP_VERSION = "1.9.39"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -270,7 +270,7 @@ def fetch_bytes(url: str, *, timeout: int = 30) -> bytes:
     request = Request(
         url,
         headers={
-            "User-Agent": "MomentInHistory/1.9.38 (+https://github.com/borgcube/HA-Moment-in-History-app)",
+            "User-Agent": "MomentInHistory/1.9.39 (+https://github.com/borgcube/HA-Moment-in-History-app)",
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         },
     )
@@ -884,7 +884,6 @@ def write_event_pages(metadata: dict[str, Any]) -> None:
     EVENT_JSON_PATH.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     source_link = html.escape(metadata["source_url"], quote=True)
     title = html.escape(metadata["event"])
-    description = html.escape(metadata["description"])
     pre_moment = html.escape(metadata["pre_moment"])
     date_label = html.escape(metadata["date_label"])
     source = html.escape(metadata["source"])
@@ -892,7 +891,7 @@ def write_event_pages(metadata: dict[str, Any]) -> None:
         f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>Moment in history</title>
 <style>html,body{{margin:0;background:#111;color:#f6f1e8;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}main{{max-width:760px;margin:auto;padding:24px}}.date{{color:#d9a441;text-transform:uppercase;letter-spacing:.12em;font-size:.8rem}}h1{{font:700 clamp(1.4rem,4vw,2.4rem)/1.1 Georgia,serif;margin:.35rem 0 1rem}}p{{margin:0 0 1rem}}a{{color:#f0c46a}}</style></head>
-<body><main><div class="date" id="date">{date_label}</div><h1 id="event">{title}</h1><p><strong>Ten seconds before:</strong> <span id="pre-moment">{pre_moment}</span></p><p id="description">{description}</p><p><a id="source" href="{source_link}" target="_blank" rel="noreferrer">Source: {source}</a></p></main>
+<body><main><div class="date" id="date">{date_label}</div><h1 id="event">{title}</h1><p><strong>Ten seconds before:</strong> <span id="pre-moment">{pre_moment}</span></p><p><a id="source" href="{source_link}" target="_blank" rel="noreferrer">Source: {source}</a></p></main>
 <script>
 (async function () {{
   try {{
@@ -902,7 +901,6 @@ def write_event_pages(metadata: dict[str, Any]) -> None:
     document.getElementById('date').textContent = data.date_label || '';
     document.getElementById('event').textContent = data.event || '';
     document.getElementById('pre-moment').textContent = data.pre_moment || '';
-    document.getElementById('description').textContent = data.description || '';
     const sourceElement = document.getElementById('source');
     sourceElement.href = data.source_url || '#';
     sourceElement.textContent = data.source ? 'Source: ' + data.source : 'Source';
@@ -915,6 +913,23 @@ def write_event_pages(metadata: dict[str, Any]) -> None:
 """,
         encoding="utf-8",
     )
+
+
+def refresh_event_page() -> None:
+    """Rewrite a legacy current event page without generating a new image."""
+    try:
+        metadata = json.loads(EVENT_JSON_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(metadata, dict):
+        return
+    required = ("date_label", "event", "pre_moment", "source", "source_url")
+    if not all(field in metadata for field in required):
+        return
+    try:
+        write_event_pages(metadata)
+    except OSError as exc:
+        log(f"Current event page refresh failed: {exc}")
 
 
 def _archive_entries() -> list[dict[str, str]]:
@@ -960,7 +975,6 @@ def archive_event_metadata(target_day: date) -> None:
         "event",
         "title",
         "year",
-        "description",
         "pre_moment",
         "selection_reason",
         "source",
@@ -1073,9 +1087,7 @@ def write_archive_viewer() -> None:
             const preMoment = document.createElement('p');
             preMoment.innerHTML = '<strong>Ten seconds before:</strong> ';
             preMoment.append(document.createTextNode(metadata.pre_moment || ''));
-            const context = document.createElement('p');
-            context.textContent = metadata.description || '';
-            details.append(event, preMoment, context);
+            details.append(event, preMoment);
             if (metadata.source_url) {
               const source = document.createElement('a');
               source.href = metadata.source_url;
@@ -1194,14 +1206,8 @@ def event_email_html(metadata: dict[str, Any]) -> str:
     date_label = html.escape(str(metadata.get("date_label", "")), quote=True)
     event = html.escape(str(metadata.get("event", "")), quote=True)
     pre_moment = html.escape(str(metadata.get("pre_moment", "")), quote=True)
-    description = html.escape(str(metadata.get("description", "")).strip(), quote=True)
     source = html.escape(str(metadata.get("source", "")), quote=True)
     source_url = html.escape(str(metadata.get("source_url", "")), quote=True)
-    description_block = (
-        f'<p style="margin:16px 0 0"><strong>Context</strong><br>{description}</p>'
-        if description
-        else ""
-    )
     return f"""<!doctype html>
 <html lang="en">
   <body style="margin:0;background:#f4f1eb;color:#1c1c1c;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;line-height:1.5">
@@ -1214,7 +1220,6 @@ def event_email_html(metadata: dict[str, Any]) -> str:
         <div style="padding-top:14px">
           <p style="margin:0"><strong>Event</strong><br>{event}</p>
           <p style="margin:16px 0 0"><strong>Ten seconds before</strong><br>{pre_moment}</p>
-          {description_block}
           <p style="margin:16px 0 0"><a href="{source_url}" style="color:#315f9c">Source: {source}</a></p>
         </div>
       </details>
@@ -1615,7 +1620,6 @@ def generate(target_day: date, *, reuse_existing_event: bool = False) -> None:
         "title": selected.title,
         "year": selected.year,
         "event_year_label": event_year_label,
-        "description": selected.text,
         "pre_moment": pre_moment,
         "selection_reason": selection_reason,
         "source": source_status,
@@ -1705,6 +1709,7 @@ def daemon() -> int:
         startup_pending = True
         initial_status_logged = False
         try:
+            refresh_event_page()
             write_archive_viewer()
             if ARCHIVE_IMAGES and IMAGE_PATH.is_file():
                 try:
