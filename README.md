@@ -223,6 +223,8 @@ The app writes these files under `/config/www/moment-in-history/`:
 
 The app checks every 30 seconds and generates after `schedule_time` if today's generation has not completed. A restart after the scheduled time automatically catches up when today's image is missing. **Regenerate on startup** overrides the normal daily guard and creates a fresh image even when today's image is already present. Event discovery uses the English Wikipedia REST feed at `https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/MM/DD`; the response contains the event text, historical year, and linked Wikipedia pages used by the app.
 
+For each date, the configured Ollama text model ranks the complete event list by lasting impact and historical stakes. The app then chooses deterministically from the top five candidates, applying a penalty to events selected on that calendar date during the previous five years. The selection history is stored in `/data/moment-in-history-selection-history.json`, so future annual runs can rotate while remaining reproducible. **Regenerate today's event** and **Regenerate on startup** preserve the current event and regenerate its artwork instead of selecting a different subject.
+
 ## Troubleshooting
 
 ### The disclosure text is from yesterday

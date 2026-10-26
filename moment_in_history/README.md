@@ -45,6 +45,8 @@ Home Assistant creates a separate `notify.*` entity for each SMTP recipient. SMT
 
 Open **Moment in history → Info → Open Web UI**. This opens the App's Home Assistant configuration page; Ollama Open WebUI is not required. Enter or edit the primary and fallback Ollama API URLs there. The page automatically discovers models through Ollama `/api/tags` and OpenAI `/v1/models`, as well as existing `notify.*` entities, when it opens and when it returns to the foreground. Use **Refresh now** only for an immediate retry. Existing `notify.*` entities appear in the **Email delivery** list; enable **Send the daily image and event by email**, select one or more recipients, and save.
 
+The daily event is selected from the complete English Wikipedia On This Day list. Ollama ranks the candidates by lasting impact, then the app rotates deterministically through the top five while penalizing events selected on the same calendar date during the previous five years. The history is kept in `/data/moment-in-history-selection-history.json`. Regeneration preserves the current event and creates new artwork for it.
+
 The same page can manage recipients after SMTP has been configured: type an email address and press **Space**, **Enter**, or **Add email**. The app asks Home Assistant to create the SMTP recipient and displays the resulting email-to-`notify.*` pill. Removing a pill removes only the SMTP recipient created through this app. If automatic recipient management is unavailable, add recipients in the SMTP integration and select their existing `notify.*` entities instead.
 
 For provider-specific settings, see the [Home Assistant SMTP documentation](https://www.home-assistant.io/integrations/smtp/).

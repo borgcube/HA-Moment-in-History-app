@@ -6,6 +6,18 @@ Release notes focus on why an existing user should upgrade and call out any acti
 
 Add user-visible changes here during development, then move them into a versioned section when `moment_in_history/config.yaml` is bumped.
 
+## 1.9.38 — 2026-10-26
+
+### Why upgrade
+
+The app now rotates through different high-impact events over the years instead of repeatedly choosing the same event for a calendar date.
+
+### Changed
+
+- Rank the complete Wikipedia event list, then choose deterministically from the top five candidates for each year.
+- Penalize events selected on the same date during the previous five years, with selection history kept in the App's persistent `/data` directory.
+- Keep the existing event when **Regenerate today's event** or **Regenerate on startup** is used, so regeneration creates new artwork without unexpectedly changing the historical subject.
+
 ## 1.9.37 — 2026-10-26
 
 ### Why upgrade

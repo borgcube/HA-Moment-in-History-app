@@ -12,9 +12,11 @@ from __future__ import annotations
 import argparse
 import base64
 import fcntl
+import hashlib
 import html
 import json
 import os
+import random
 import re
 import signal
 import shutil
@@ -36,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.37"
+APP_VERSION = "1.9.38"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -155,6 +157,11 @@ ARCHIVE_INDEX_PATH = ARCHIVE_DIR / "index.json"
 ARCHIVE_HTML_PATH = ROOT / "archive.html"
 LOCK_PATH = ROOT / ".generation.lock"
 LOG_PATH = ROOT / "generation.log"
+SELECTION_HISTORY_PATH = Path(
+    os.environ.get("MOMENT_SELECTION_HISTORY_FILE", "/data/moment-in-history-selection-history.json")
+)
+ROTATION_TOP_CANDIDATES = 5
+ROTATION_LOOKBACK_YEARS = 5
 
 WIKIPEDIA_ON_THIS_DAY_URL = "https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/{month:02d}/{day:02d}"
 
@@ -263,7 +270,7 @@ def fetch_bytes(url: str, *, timeout: int = 30) -> bytes:
     request = Request(
         url,
         headers={
-            "User-Agent": "MomentInHistory/1.9.37 (+https://github.com/borgcube/HA-Moment-in-History-app)",
+            "User-Agent": "MomentInHistory/1.9.38 (+https://github.com/borgcube/HA-Moment-in-History-app)",
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         },
     )
@@ -313,14 +320,146 @@ def fetch_wikipedia_events(day: date) -> list[Event]:
     return events
 
 
-def choose_event(events: list[Event]) -> tuple[Event, str]:
-    """Use local Ollama to rank all candidates, with a deterministic fallback."""
+def event_key(event: Event) -> str:
+    """Return a stable identity for the same historical event across feed updates."""
+    return "\x1f".join(
+        (
+            str(event.year) if event.year is not None else "",
+            event.source_url.strip().rstrip("/").casefold(),
+            event.title.strip().casefold(),
+            clean_text(event.text).casefold(),
+        )
+    )
+
+
+def _event_from_metadata(metadata: dict[str, Any]) -> Event | None:
+    """Build an Event from current or archived metadata when available."""
+    text = clean_text(str(metadata.get("event") or metadata.get("description") or ""))
+    if not text:
+        return None
+    raw_year = metadata.get("year")
+    try:
+        year = int(raw_year) if raw_year is not None else None
+    except (TypeError, ValueError):
+        year = None
+    return Event(
+        year=year,
+        title=clean_text(str(metadata.get("title") or text)),
+        text=text,
+        source=clean_text(str(metadata.get("source") or "English Wikipedia On This Day")),
+        source_url=clean_text(str(metadata.get("source_url") or "")),
+    )
+
+
+def _history_record(target_day: date, event: Event) -> dict[str, Any]:
+    """Return the persisted form of one selected event."""
+    return {
+        "date": target_day.isoformat(),
+        "event_key": event_key(event),
+        "year": event.year,
+        "title": event.title,
+        "text": event.text,
+        "source": event.source,
+        "source_url": event.source_url,
+    }
+
+
+def load_selection_history() -> list[dict[str, Any]]:
+    """Load annual event selections, tolerating a missing or older history file."""
+    try:
+        payload = json.loads(SELECTION_HISTORY_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        payload = {}
+    raw_records = payload.get("selections", []) if isinstance(payload, dict) else payload
+    if not isinstance(raw_records, list):
+        return []
+
+    records: list[dict[str, Any]] = []
+    for raw_record in raw_records:
+        if not isinstance(raw_record, dict):
+            continue
+        date_text = str(raw_record.get("date", ""))
+        try:
+            date.fromisoformat(date_text)
+        except ValueError:
+            continue
+        record = dict(raw_record)
+        record["date"] = date_text
+        if not clean_text(str(record.get("event_key", ""))):
+            try:
+                record["event_key"] = event_key(
+                    Event(
+                        year=int(record["year"]) if record.get("year") is not None else None,
+                        title=clean_text(str(record.get("title", ""))),
+                        text=clean_text(str(record.get("text", ""))),
+                        source=clean_text(str(record.get("source", ""))),
+                        source_url=clean_text(str(record.get("source_url", ""))),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        if clean_text(str(record.get("event_key", ""))):
+            records.append(record)
+
+    # Seed new installations from the current metadata generated before the
+    # rotation history file existed. This makes the first annual rotation
+    # after an upgrade aware of the previous year's selected event.
+    try:
+        current_metadata = json.loads(EVENT_JSON_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        current_metadata = None
+    if isinstance(current_metadata, dict):
+        current_date_text = str(current_metadata.get("date", ""))
+        try:
+            current_day = date.fromisoformat(current_date_text)
+        except ValueError:
+            current_day = None
+        current_event = _event_from_metadata(current_metadata)
+        if current_day and current_event and not any(
+            record.get("date") == current_date_text for record in records
+        ):
+            records.append(_history_record(current_day, current_event))
+    return records
+
+
+def record_selection_history(target_day: date, event: Event) -> None:
+    """Persist one selection for a generation date so future years can rotate."""
+    target_date = target_day.isoformat()
+    records = [record for record in load_selection_history() if record.get("date") != target_date]
+    records.append(_history_record(target_day, event))
+    records.sort(key=lambda record: str(record.get("date", "")))
+    SELECTION_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = SELECTION_HISTORY_PATH.with_suffix(".tmp.json")
+    temporary_path.write_text(
+        json.dumps({"version": 1, "selections": records}, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary_path, SELECTION_HISTORY_PATH)
+
+
+def load_existing_selection(target_day: date) -> tuple[Event, dict[str, Any]] | None:
+    """Return the current event when a regeneration must preserve today's subject."""
+    try:
+        metadata = json.loads(EVENT_JSON_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(metadata, dict) or metadata.get("date") != target_day.isoformat():
+        return None
+    selected = _event_from_metadata(metadata)
+    if not selected:
+        return None
+    return selected, metadata
+
+
+def _rank_events(events: list[Event]) -> tuple[list[Event], str]:
+    """Rank all candidates with local Ollama, with a deterministic fallback."""
     numbered = "\n".join(f"{i}: {event.year or '?'} — {event.text}" for i, event in enumerate(events))
-    prompt = f"""You are selecting one event for a daily historical illustration.
-Choose the single most impactful event from the complete list below. Prefer events
-with broad, lasting consequences or unusually vivid historical stakes. Do not choose
-a birth, death, holiday, or trivial detail. Return JSON only with this exact shape:
-{{"index": 0, "why": "one concise sentence"}}
+    prompt = f"""You are ranking events for a daily historical illustration.
+Rank the complete list from most impactful to least impactful. Prefer events with
+broad, lasting consequences or unusually vivid historical stakes. Do not prioritize
+a birth, death, holiday, or trivial detail merely because it is famous. Return JSON
+only with this exact shape, where ranking contains valid zero-based indexes:
+{{"ranking": [0, 1, 2], "why": "one concise sentence explaining the top choice"}}
 
 Complete candidate list:
 {numbered}
@@ -336,9 +475,21 @@ Complete candidate list:
         response = json.loads(post_json_with_fallback("/api/chat", payload))
         content = response.get("message", {}).get("content", "")
         decision = json.loads(content)
-        index = int(decision.get("index", 0))
-        if 0 <= index < len(events):
-            return events[index], clean_text(str(decision.get("why", "Selected by local Ollama.")))
+        raw_ranking = decision.get("ranking")
+        if not isinstance(raw_ranking, list):
+            raw_ranking = [decision.get("index")] if decision.get("index") is not None else []
+        ranking_indexes: list[int] = []
+        for raw_index in raw_ranking:
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < len(events) and index not in ranking_indexes:
+                ranking_indexes.append(index)
+        if ranking_indexes:
+            ranking_indexes.extend(index for index in range(len(events)) if index not in ranking_indexes)
+            reason = clean_text(str(decision.get("why", "Ranked by local Ollama.")))
+            return [events[index] for index in ranking_indexes], reason or "Ranked by local Ollama."
     except Exception as exc:  # noqa: BLE001 - deterministic fallback is intentional
         log(f"Ollama event ranking failed: {exc}")
 
@@ -357,9 +508,84 @@ Complete candidate list:
         "launch": 4,
         "speech": 4,
     }
-    scored = [(sum(weight for word, weight in weights.items() if word in event.text.lower()), i, event) for i, event in enumerate(events)]
-    _, _, winner = max(scored, key=lambda item: (item[0], len(item[2].text)))
-    return winner, "Selected by the local deterministic fallback ranking."
+    scored = [
+        (
+            sum(weight for word, weight in weights.items() if word in event.text.lower()),
+            len(event.text),
+            index,
+            event,
+        )
+        for index, event in enumerate(events)
+    ]
+    scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return [item[3] for item in scored], "Ranked by the local deterministic fallback."
+
+
+def _recent_penalty(event: Event, target_day: date, history: list[dict[str, Any]]) -> int:
+    """Return a larger penalty for selections made in more recent years."""
+    key = event_key(event)
+    penalty = 0
+    for record in history:
+        if record.get("event_key") != key:
+            continue
+        try:
+            selected_day = date.fromisoformat(str(record.get("date", "")))
+        except ValueError:
+            continue
+        if selected_day.month != target_day.month or selected_day.day != target_day.day:
+            continue
+        age = target_day.year - selected_day.year
+        if 1 <= age <= ROTATION_LOOKBACK_YEARS:
+            penalty += ROTATION_LOOKBACK_YEARS - age + 1
+    return penalty
+
+
+def choose_event(events: list[Event], target_day: date | None = None) -> tuple[Event, str]:
+    """Rank all candidates, then rotate deterministically through the top five."""
+    if not events:
+        raise ValueError("Cannot choose an event from an empty list")
+
+    history = load_selection_history() if target_day is not None else []
+    if target_day is not None:
+        current_date = target_day.isoformat()
+        for record in history:
+            if record.get("date") != current_date:
+                continue
+            selected_key = record.get("event_key")
+            for event in events:
+                if event_key(event) == selected_key:
+                    return event, f"Preserved the annual selection already recorded for {target_day.year}."
+
+    ranked, ranking_reason = _rank_events(events)
+    if target_day is None:
+        return ranked[0], ranking_reason
+
+    candidates = ranked[: min(ROTATION_TOP_CANDIDATES, len(ranked))]
+    if len(candidates) == 1:
+        return candidates[0], ranking_reason
+
+    weights: list[float] = []
+    for position, event in enumerate(candidates):
+        impact_weight = len(candidates) - position
+        recency_penalty = _recent_penalty(event, target_day, history)
+        weights.append(max(0.25, float(impact_weight - recency_penalty)))
+
+    seed_bytes = hashlib.sha256(
+        f"moment-in-history:{target_day.isoformat()}".encode("utf-8")
+    ).digest()
+    selector = random.Random(int.from_bytes(seed_bytes[:8], "big")).random() * sum(weights)
+    selected_position = 0
+    for position, weight in enumerate(weights):
+        selector -= weight
+        if selector < 0:
+            selected_position = position
+            break
+    selected = candidates[selected_position]
+    return (
+        selected,
+        f"{ranking_reason} Annual rotation selected impact rank {selected_position + 1} "
+        f"of {len(candidates)} for {target_day.year}; recent selections are penalized.",
+    )
 
 
 def post_json(url: str, payload: dict[str, Any], *, timeout: int = 900) -> str:
@@ -739,6 +965,7 @@ def archive_event_metadata(target_day: date) -> None:
         "selection_reason",
         "source",
         "source_url",
+        "event_key",
         "generated_at",
     )
     archived = {field: metadata[field] for field in fields if field in metadata}
@@ -1334,16 +1561,31 @@ def archive_image(target_day: date) -> None:
         log(f"Archive viewer update failed: {exc}")
 
 
-def generate(target_day: date) -> None:
+def generate(target_day: date, *, reuse_existing_event: bool = False) -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
-    try:
-        events = fetch_wikipedia_events(target_day)
-        source_status = "English Wikipedia On This Day"
-    except (HTTPError, URLError, RuntimeError, TimeoutError) as exc:
-        log(f"English Wikipedia On This Day unavailable ({exc})")
-        raise
+    existing_selection = load_existing_selection(target_day) if reuse_existing_event else None
+    if existing_selection:
+        selected, existing_metadata = existing_selection
+        events = [selected]
+        source_status = selected.source
+        selection_reason = "Preserved the existing event for regeneration."
+        previous_reason = clean_text(str(existing_metadata.get("selection_reason", "")))
+        if previous_reason:
+            selection_reason = f"{selection_reason} {previous_reason}"
+        try:
+            candidate_count = max(1, int(existing_metadata.get("candidate_count", 1)))
+        except (TypeError, ValueError):
+            candidate_count = 1
+    else:
+        try:
+            events = fetch_wikipedia_events(target_day)
+            source_status = "English Wikipedia On This Day"
+        except (HTTPError, URLError, RuntimeError, TimeoutError) as exc:
+            log(f"English Wikipedia On This Day unavailable ({exc})")
+            raise
 
-    selected, selection_reason = choose_event(events)
+        selected, selection_reason = choose_event(events, target_day)
+        candidate_count = len(events)
     pre_moment_prompt = f"Write a vivid, filmable visual brief of 60 to 90 words in 2 or 3 sentences for the exact ten seconds before this event. Treat the supplied event as authoritative context, but do not describe the event happening or its aftermath. Specify the historically appropriate location, period, lighting or weather, focal subject, up to five people's distinct posture/gaze/gesture, meaningful physical objects, and one immediate physical cue that proves the action is about to begin. Make the scene event-specific and causal, never a generic crowd or posed gathering. Mention only visible people, setting, light, atmosphere, and non-text-bearing physical objects. Do not mention paper, pages, scripts, screens, signs, labels, logos, or writing. Event: {selected.text}"
     try:
         pre_payload = {
@@ -1378,6 +1620,7 @@ def generate(target_day: date) -> None:
         "selection_reason": selection_reason,
         "source": source_status,
         "source_url": selected.source_url,
+        "event_key": event_key(selected),
         "image_url": IMAGE_URL,
         "generated_at": datetime.now(TIME_ZONE).isoformat(),
         "image_model": IMAGE_MODEL,
@@ -1385,16 +1628,20 @@ def generate(target_day: date) -> None:
         "image_backend_used": image_backend_used,
         "openai_image_model": OPENAI_IMAGE_MODEL,
         "text_model": TEXT_MODEL,
-        "candidate_count": len(events),
+        "candidate_count": candidate_count,
         "prompt": prompt,
     }
     write_event_pages(metadata)
+    try:
+        record_selection_history(target_day, selected)
+    except OSError as exc:
+        log(f"Event rotation history update failed: {exc}")
     archive_image(target_day)
     try:
         send_event_email(metadata, IMAGE_PATH)
     except Exception as exc:  # noqa: BLE001 - email must not stop daily generation
         log(f"Email delivery failed: {exc}")
-    log(f"Generated {target_day.isoformat()} — {selected.text} ({len(events)} candidates; {source_status})")
+    log(f"Generated {target_day.isoformat()} — {selected.text} ({candidate_count} candidates; {source_status})")
 
 
 def main() -> int:
@@ -1503,7 +1750,10 @@ def daemon() -> int:
                 try:
                     with LOCK_PATH.open("w", encoding="utf-8") as lock_handle:
                         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-                        generate(today)
+                        generate(
+                            today,
+                            reuse_existing_event=REGENERATE_TODAY or REGENERATE_ON_STARTUP,
+                        )
                         marker_path.write_text(today.isoformat() + "\n", encoding="utf-8")
                         clear_regenerate_today_request()
                 except Exception as exc:  # noqa: BLE001 - daemon logs and retries

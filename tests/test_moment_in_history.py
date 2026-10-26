@@ -30,6 +30,137 @@ class AppMetadataTest(unittest.TestCase):
         self.assertIn("Home Assistant can now show the app's release history", changelog)
 
 
+class EventSelectionTest(unittest.TestCase):
+    @staticmethod
+    def _events() -> list[moment_in_history.Event]:
+        return [
+            moment_in_history.Event(
+                year=1900 + index,
+                title=f"Event {index}",
+                text=f"Historical event {index} changes the world.",
+                source="Test source",
+                source_url=f"https://example.invalid/event-{index}",
+            )
+            for index in range(5)
+        ]
+
+    def test_annual_rotation_is_deterministic_and_sends_the_complete_list_to_ollama(self):
+        events = self._events()
+        ranking_response = json.dumps(
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "ranking": [0, 1, 2, 3, 4],
+                            "why": "The first event has the broadest lasting consequences.",
+                        }
+                    )
+                }
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(moment_in_history, "SELECTION_HISTORY_PATH", Path(directory) / "history.json"), \
+                patch.object(moment_in_history, "post_json_with_fallback", return_value=ranking_response) as rank:
+            first, first_reason = moment_in_history.choose_event(events, date(2026, 10, 26))
+            second, second_reason = moment_in_history.choose_event(events, date(2026, 10, 26))
+
+        self.assertEqual(first, second)
+        self.assertEqual(first_reason, second_reason)
+        self.assertIn("Annual rotation selected", first_reason)
+        self.assertEqual(rank.call_count, 2)
+        request_prompt = rank.call_args.args[1]["messages"][0]["content"]
+        self.assertIn("Historical event 4 changes the world.", request_prompt)
+
+    def test_recent_selection_is_penalized(self):
+        events = self._events()
+        history = [
+            {
+                "date": "2025-10-26",
+                "event_key": moment_in_history.event_key(events[0]),
+            }
+        ]
+        self.assertGreater(
+            moment_in_history._recent_penalty(events[0], date(2026, 10, 26), history),
+            moment_in_history._recent_penalty(events[1], date(2026, 10, 26), history),
+        )
+
+    def test_existing_event_metadata_seeds_history_after_upgrade(self):
+        events = self._events()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event_path = root / "event.json"
+            event_path.write_text(
+                json.dumps(
+                    {
+                        "date": "2025-10-26",
+                        "event": events[0].text,
+                        "title": events[0].title,
+                        "year": events[0].year,
+                        "source": events[0].source,
+                        "source_url": events[0].source_url,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(moment_in_history, "EVENT_JSON_PATH", event_path), \
+                    patch.object(moment_in_history, "SELECTION_HISTORY_PATH", root / "missing-history.json"):
+                history = moment_in_history.load_selection_history()
+
+        self.assertTrue(
+            any(
+                record["date"] == "2025-10-26"
+                and record["event_key"] == moment_in_history.event_key(events[0])
+                for record in history
+            )
+        )
+
+    def test_manual_regeneration_reuses_the_existing_event_without_fetching_wikipedia(self):
+        existing = {
+            "date": "2026-10-26",
+            "date_label": "26 October 2026",
+            "event": "The existing historical event happens.",
+            "title": "Existing event",
+            "year": 1966,
+            "description": "The existing historical event happens.",
+            "selection_reason": "Annual rotation selected impact rank 2 of 5 for 2026; recent selections are penalized.",
+            "source": "English Wikipedia On This Day",
+            "source_url": "https://en.wikipedia.org/wiki/Existing_event",
+            "candidate_count": 49,
+        }
+
+        def write_fake_image(_prompt, destination):
+            destination.write_bytes(b"fake png")
+            return "Test image provider"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event_path = root / "event.json"
+            event_path.write_text(json.dumps(existing), encoding="utf-8")
+            with patch.object(moment_in_history, "ROOT", root), \
+                    patch.object(moment_in_history, "IMAGE_PATH", root / "moment-in-history.png"), \
+                    patch.object(moment_in_history, "EVENT_JSON_PATH", event_path), \
+                    patch.object(moment_in_history, "EVENT_HTML_PATH", root / "event.html"), \
+                    patch.object(moment_in_history, "LOG_PATH", root / "generation.log"), \
+                    patch.object(moment_in_history, "SELECTION_HISTORY_PATH", root / "history.json"), \
+                    patch.object(moment_in_history, "fetch_wikipedia_events") as fetch_events, \
+                    patch.object(
+                        moment_in_history,
+                        "post_json_with_fallback",
+                        return_value=json.dumps({"message": {"content": "The room holds its breath."}}),
+                    ), \
+                    patch.object(moment_in_history, "run_image_model", side_effect=write_fake_image), \
+                    patch.object(moment_in_history, "overlay_date") as overlay, \
+                    patch.object(moment_in_history, "archive_image"), \
+                    patch.object(moment_in_history, "send_event_email"):
+                moment_in_history.generate(date(2026, 10, 26), reuse_existing_event=True)
+
+            fetch_events.assert_not_called()
+            overlay.assert_called_once()
+            metadata = json.loads(event_path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata["event"], existing["event"])
+            self.assertIn("Preserved the existing event", metadata["selection_reason"])
+
+
 class EventPageRefreshTest(unittest.TestCase):
     def test_fetch_wikipedia_events_uses_the_direct_english_rest_feed(self):
         payload = {
@@ -86,7 +217,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.37 starting", report)
+            self.assertIn("Moment in history App 1.9.38 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -363,6 +494,7 @@ class EventPageRefreshTest(unittest.TestCase):
                     patch.object(moment_in_history, "EVENT_JSON_PATH", root / "event.json"), \
                     patch.object(moment_in_history, "EVENT_HTML_PATH", root / "event.html"), \
                     patch.object(moment_in_history, "LOG_PATH", root / "generation.log"), \
+                    patch.object(moment_in_history, "SELECTION_HISTORY_PATH", root / "history.json"), \
                     patch.object(moment_in_history, "fetch_wikipedia_events", return_value=[event]), \
                     patch.object(moment_in_history, "choose_event", return_value=(event, "test")), \
                     patch.object(moment_in_history, "post_json_with_fallback", return_value=json.dumps({"message": {"content": "The room holds its breath."}})), \
@@ -393,6 +525,7 @@ class EventPageRefreshTest(unittest.TestCase):
                     patch.object(moment_in_history, "EVENT_JSON_PATH", root / "event.json"), \
                     patch.object(moment_in_history, "EVENT_HTML_PATH", root / "event.html"), \
                     patch.object(moment_in_history, "LOG_PATH", root / "generation.log"), \
+                    patch.object(moment_in_history, "SELECTION_HISTORY_PATH", root / "history.json"), \
                     patch.object(moment_in_history, "fetch_wikipedia_events", return_value=[event]), \
                     patch.object(moment_in_history, "choose_event", return_value=(event, "test")), \
                     patch.object(
