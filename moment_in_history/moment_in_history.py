@@ -38,7 +38,7 @@ import config_ui
 
 
 TIME_ZONE = ZoneInfo("Europe/Amsterdam")
-APP_VERSION = "1.9.40"
+APP_VERSION = "1.9.41"
 POLL_INTERVAL_SECONDS = 30
 SHUTDOWN_EVENT = threading.Event()
 HOME_ASSISTANT_API_URL = os.environ.get(
@@ -270,7 +270,7 @@ def fetch_bytes(url: str, *, timeout: int = 30) -> bytes:
     request = Request(
         url,
         headers={
-            "User-Agent": "MomentInHistory/1.9.40 (+https://github.com/borgcube/HA-Moment-in-History-app)",
+            "User-Agent": "MomentInHistory/1.9.41 (+https://github.com/borgcube/HA-Moment-in-History-app)",
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         },
     )
@@ -283,12 +283,41 @@ def fetch_json(url: str) -> dict[str, Any]:
 
 
 def format_event_year(year: int | None) -> str:
-    """Return the historical year used as the image's only text label."""
+    """Return a readable historical year label."""
     if year is None:
         return "Unknown year"
     if year < 0:
         return f"{abs(year)} BCE"
     return str(year)
+
+
+def format_event_date(day: date, year: int | None) -> str:
+    """Return the historical date represented by an On This Day event."""
+    return f"{day.day} {day.strftime('%B')} {format_event_year(year)}"
+
+
+def metadata_event_date_label(metadata: dict[str, Any]) -> str:
+    """Return the event date, with a fallback for metadata from older releases."""
+    explicit = clean_text(str(metadata.get("event_date_label", "")))
+    if explicit:
+        return explicit
+
+    try:
+        event_day = date.fromisoformat(str(metadata.get("date", "")).strip())
+    except ValueError:
+        event_day = None
+    if event_day is not None:
+        raw_year = metadata.get("year")
+        if raw_year is not None:
+            try:
+                return format_event_date(event_day, int(raw_year))
+            except (TypeError, ValueError):
+                pass
+        legacy_year = clean_text(str(metadata.get("event_year_label", "")))
+        if legacy_year:
+            return f"{event_day.day} {event_day.strftime('%B')} {legacy_year}"
+
+    return clean_text(str(metadata.get("date_label", "")))
 
 
 def fetch_wikipedia_events(day: date) -> list[Event]:
@@ -887,6 +916,7 @@ def write_event_pages(metadata: dict[str, Any]) -> None:
     # so drop it when rewriting current metadata, including legacy data during
     # startup refresh.
     persisted_metadata.pop("description", None)
+    persisted_metadata["event_date_label"] = metadata_event_date_label(metadata)
     EVENT_JSON_PATH.write_text(
         json.dumps(persisted_metadata, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -894,20 +924,20 @@ def write_event_pages(metadata: dict[str, Any]) -> None:
     source_link = html.escape(metadata["source_url"], quote=True)
     title = html.escape(metadata["event"])
     pre_moment = html.escape(metadata["pre_moment"])
-    date_label = html.escape(metadata["date_label"])
+    event_date_label = html.escape(metadata_event_date_label(metadata))
     source = html.escape(metadata["source"])
     EVENT_HTML_PATH.write_text(
         f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>Moment in history</title>
 <style>html,body{{margin:0;background:#111;color:#f6f1e8;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}main{{max-width:760px;margin:auto;padding:24px}}.date{{color:#d9a441;text-transform:uppercase;letter-spacing:.12em;font-size:.8rem}}h1{{font:700 clamp(1.4rem,4vw,2.4rem)/1.1 Georgia,serif;margin:.35rem 0 1rem}}p{{margin:0 0 1rem}}a{{color:#f0c46a}}</style></head>
-<body><main><div class="date" id="date">{date_label}</div><h1 id="event">{title}</h1><p><strong>Ten seconds before:</strong> <span id="pre-moment">{pre_moment}</span></p><p><a id="source" href="{source_link}" target="_blank" rel="noreferrer">Source: {source}</a></p></main>
+<body><main><div class="date" id="date">{event_date_label}</div><h1 id="event">{title}</h1><p><strong>Ten seconds before:</strong> <span id="pre-moment">{pre_moment}</span></p><p><a id="source" href="{source_link}" target="_blank" rel="noreferrer">Source: {source}</a></p></main>
 <script>
 (async function () {{
   try {{
     const response = await fetch('./event.json?refresh=' + Date.now(), {{cache: 'no-store'}});
     if (!response.ok) throw new Error('event metadata request failed');
     const data = await response.json();
-    document.getElementById('date').textContent = data.date_label || '';
+    document.getElementById('date').textContent = data.event_date_label || data.date_label || '';
     document.getElementById('event').textContent = data.event || '';
     document.getElementById('pre-moment').textContent = data.pre_moment || '';
     const sourceElement = document.getElementById('source');
@@ -967,6 +997,14 @@ def _archive_entries() -> list[dict[str, str]]:
         metadata_path = path.with_suffix(".json")
         if metadata_path.is_file():
             entries[-1]["metadata_path"] = f"archive/{metadata_path.relative_to(ARCHIVE_DIR).as_posix()}"
+            try:
+                archived_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, TypeError):
+                archived_metadata = {}
+            if isinstance(archived_metadata, dict):
+                event_date_label = metadata_event_date_label(archived_metadata)
+                if event_date_label:
+                    entries[-1]["event_date_label"] = event_date_label
     return sorted(entries, key=lambda item: item["date"], reverse=True)
 
 
@@ -984,6 +1022,7 @@ def archive_event_metadata(target_day: date) -> None:
         "event",
         "title",
         "year",
+        "event_date_label",
         "pre_moment",
         "selection_reason",
         "source",
@@ -992,6 +1031,7 @@ def archive_event_metadata(target_day: date) -> None:
         "generated_at",
     )
     archived = {field: metadata[field] for field in fields if field in metadata}
+    archived["event_date_label"] = metadata_event_date_label(metadata)
     archived["date"] = target_day.isoformat()
     metadata_path = ARCHIVE_DIR / f"{target_day.year:04d}" / f"{target_day.month:02d}" / f"{target_day.isoformat()}.json"
     temporary_path = metadata_path.with_suffix(".tmp.json")
@@ -1072,11 +1112,12 @@ def write_archive_viewer() -> None:
       const image = document.createElement('img');
       image.loading = 'lazy';
       image.src = entry.path;
-      image.alt = 'Moment in history — ' + entry.date_label;
+      const displayDate = entry.event_date_label || entry.date_label || '';
+      image.alt = 'Moment in history — ' + displayDate;
       imageLink.appendChild(image);
       const label = document.createElement('time');
       label.dateTime = entry.date;
-      label.textContent = entry.date_label;
+      label.textContent = displayDate;
       card.append(imageLink, label);
       if (entry.metadata_path) {
         const details = document.createElement('details');
@@ -1212,7 +1253,7 @@ def _send_smtp_payload(payload: dict[str, Any]) -> None:
 
 def event_email_html(metadata: dict[str, Any]) -> str:
     """Build a broadly compatible HTML email with a disclosure-style details block."""
-    date_label = html.escape(str(metadata.get("date_label", "")), quote=True)
+    event_date_label = html.escape(metadata_event_date_label(metadata), quote=True)
     event = html.escape(str(metadata.get("event", "")), quote=True)
     pre_moment = html.escape(str(metadata.get("pre_moment", "")), quote=True)
     source = html.escape(str(metadata.get("source", "")), quote=True)
@@ -1221,7 +1262,7 @@ def event_email_html(metadata: dict[str, Any]) -> str:
 <html lang="en">
   <body style="margin:0;background:#f4f1eb;color:#1c1c1c;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;line-height:1.5">
     <div style="max-width:760px;margin:0 auto;padding:24px 16px">
-      <div style="color:#72551d;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase">{date_label}</div>
+      <div style="color:#72551d;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase">{event_date_label}</div>
       <h1 style="font-size:24px;line-height:1.2;margin:6px 0 18px">Moment in history</h1>
       <img src="cid:moment_in_history_image" alt="Moment in history illustration" style="display:block;width:100%;height:auto;border:0;margin:0 0 20px">
       <details style="background:#fff;border:1px solid #d8d1c5;border-radius:8px;padding:12px 16px">
@@ -1267,9 +1308,9 @@ def send_event_email(
     _send_smtp_payload(
         {
             "entity_id": notify_entities[0] if len(notify_entities) == 1 else notify_entities,
-            "title": f"Moment in history — {metadata['date_label']}",
+            "title": f"Moment in history — {metadata_event_date_label(metadata)}",
             "message": (
-                f"Moment in history — {metadata['date_label']}\n\n"
+                f"Moment in history — {metadata_event_date_label(metadata)}\n\n"
                 f"Event:\n{metadata['event']}\n\n"
                 f"Ten seconds before:\n{metadata['pre_moment']}\n\n"
                 f"Source: {metadata['source']}\n{metadata['source_url']}\n"
@@ -1616,6 +1657,7 @@ def generate(target_day: date, *, reuse_existing_event: bool = False) -> None:
 
     date_label = f"{target_day.day} {target_day.strftime('%B %Y')}"
     event_year_label = format_event_year(selected.year)
+    event_date_label = format_event_date(target_day, selected.year)
     prompt = build_image_prompt(pre_moment, target_day, selected.text)
     temp_image = ROOT / f"moment-in-history-{int(time.time())}.png"
     image_backend_used = run_image_model(prompt, temp_image)
@@ -1625,6 +1667,7 @@ def generate(target_day: date, *, reuse_existing_event: bool = False) -> None:
     metadata = {
         "date": target_day.isoformat(),
         "date_label": date_label,
+        "event_date_label": event_date_label,
         "event": selected.text,
         "title": selected.title,
         "year": selected.year,

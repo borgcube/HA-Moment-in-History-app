@@ -6,6 +6,18 @@ Release notes focus on why an existing user should upgrade and call out any acti
 
 Add user-visible changes here during development, then move them into a versioned section when `moment_in_history/config.yaml` is bumped.
 
+## 1.9.41 — 2026-11-18
+
+### Why upgrade
+
+Disclosure dates now identify the historical event instead of showing the day the App generated the artwork.
+
+### Changed
+
+- Show the event's day, month, and historical year in the current disclosure page and email heading.
+- Preserve the generation date separately for scheduling and metadata compatibility.
+- Use the historical event date in archived-image labels and the Home Assistant test-email script.
+
 ## 1.9.40 — 2026-10-26
 
 ### Why upgrade

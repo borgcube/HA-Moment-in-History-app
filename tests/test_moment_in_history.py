@@ -217,7 +217,7 @@ class EventPageRefreshTest(unittest.TestCase):
                 moment_in_history.startup_report("test")
 
             report = stdout.getvalue()
-            self.assertIn("Moment in history App 1.9.40 starting", report)
+            self.assertIn("Moment in history App 1.9.41 starting", report)
             self.assertIn("Runtime ready:", report)
             self.assertIn("Text service configured:", report)
             self.assertIn("Image service configured:", report)
@@ -344,10 +344,13 @@ class EventPageRefreshTest(unittest.TestCase):
             self.assertIn("cache: 'no-store'", page)
             self.assertIn("Current event", page)
             self.assertIn("The room holds its breath.", page)
+            self.assertIn("23 October 1868", page)
+            self.assertNotIn("23 October 2026", page)
             self.assertNotIn('id="description"', page)
             self.assertNotIn("Current event description", page)
             persisted = json.loads((root / "event.json").read_text(encoding="utf-8"))
             self.assertEqual(persisted["event"], "Current event")
+            self.assertEqual(persisted["event_date_label"], "23 October 1868")
             self.assertNotIn("description", persisted)
 
     def test_refresh_event_page_removes_legacy_duplicate_without_generating(self):
@@ -376,11 +379,15 @@ class EventPageRefreshTest(unittest.TestCase):
             self.assertNotIn('id="description"', page)
             self.assertIn("Current event", page)
             self.assertIn("The room holds its breath.", page)
-            self.assertNotIn("description", json.loads(event_path.read_text(encoding="utf-8")))
+            persisted = json.loads(event_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["event_date_label"], "23 October 1868")
+            self.assertNotIn("description", persisted)
 
     def test_event_email_calls_home_assistant_smtp_with_current_camera(self):
         metadata = {
+            "date": "2026-10-23",
             "date_label": "23 October 2026",
+            "year": 1868,
             "event": "Current event",
             "pre_moment": "The room holds its breath.",
             "source": "Test source",
@@ -405,6 +412,9 @@ class EventPageRefreshTest(unittest.TestCase):
             request = urlopen.call_args.args[0]
             payload = json.loads(request.data.decode("utf-8"))
             self.assertEqual(payload["entity_id"], "notify.moment_in_history")
+            self.assertEqual(payload["title"], "Moment in history — 23 October 1868")
+            self.assertIn("23 October 1868", payload["html"])
+            self.assertNotIn("23 October 2026", payload["html"])
             self.assertIn("The room holds its breath.", payload["message"])
             self.assertIn("Show event details", payload["html"])
             self.assertNotIn("Context", payload["html"])
@@ -572,6 +582,7 @@ class EventPageRefreshTest(unittest.TestCase):
             self.assertEqual(overlay.call_args.args[1], "1966")
             metadata = json.loads((root / "event.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["date_label"], "26 October 2026")
+            self.assertEqual(metadata["event_date_label"], "26 October 1966")
             self.assertEqual(metadata["event_year_label"], "1966")
 
 
@@ -736,7 +747,15 @@ class ComfyUIImageProviderTest(unittest.TestCase):
             (archive_dir / "2026" / "10" / "2026-10-23.png").write_bytes(b"new")
             (archive_dir / "2026" / "09" / "2026-09-30.png").write_bytes(b"old")
             (archive_dir / "2026" / "10" / "2026-10-23.json").write_text(
-                json.dumps({"event": "A historical event", "pre_moment": "Before it happened."}),
+                json.dumps(
+                    {
+                        "date": "2026-10-23",
+                        "date_label": "23 October 2026",
+                        "year": 1868,
+                        "event": "A historical event",
+                        "pre_moment": "Before it happened.",
+                    }
+                ),
                 encoding="utf-8",
             )
             (archive_dir / "not-an-entry.png").write_bytes(b"ignore")
@@ -758,6 +777,7 @@ class ComfyUIImageProviderTest(unittest.TestCase):
                 payload["entries"][0]["metadata_path"],
                 "archive/2026/10/2026-10-23.json",
             )
+            self.assertEqual(payload["entries"][0]["event_date_label"], "23 October 1868")
             html = html_path.read_text(encoding="utf-8")
             self.assertIn("Show event details", html)
             self.assertNotIn("metadata.description", html)

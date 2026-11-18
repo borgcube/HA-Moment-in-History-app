@@ -36,7 +36,7 @@ script:
                   entity_id: notify.moment_in_history_recipient
                 data:
                   title: >-
-                    Moment in history test - {{ moment_event.data.date_label }}
+                    Moment in history test - {{ moment_event.data.event_date_label | default(moment_event.data.date_label, true) }}
                   message: >-
                     This is a test email from Moment in history.
 
